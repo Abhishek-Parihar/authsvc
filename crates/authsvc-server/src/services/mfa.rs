@@ -41,7 +41,7 @@ pub async fn verify_totp(state: &AppState, user_id: Uuid, code: &str) -> Result<
         .await?
         .ok_or(AuthError::Validation("mfa not enrolled".into()))?;
     let secret = decrypt_secret(state, &encrypted)?;
-    let _totp = TOTP::new(
+    let totp = TOTP::new(
         TotpAlgorithm::SHA1,
         6,
         1,

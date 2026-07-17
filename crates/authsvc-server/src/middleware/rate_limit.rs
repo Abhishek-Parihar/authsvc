@@ -37,6 +37,7 @@ impl RateLimiter {
         }
 
         if count > self.max_per_minute as i64 {
+            crate::observability::record_rate_limit_hit();
             return Err(AuthError::Forbidden);
         }
         Ok(())

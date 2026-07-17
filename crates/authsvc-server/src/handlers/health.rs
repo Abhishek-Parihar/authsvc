@@ -20,3 +20,12 @@ pub async fn ready(State(state): State<SharedState>) -> AppResult<impl axum::res
         .map_err(|e| authsvc_core::AuthError::Internal(e.to_string()))?;
     Ok(Json(json!({ "status": "ready" })))
 }
+
+pub async fn metrics(
+    handle: metrics_exporter_prometheus::PrometheusHandle,
+) -> impl axum::response::IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        handle.render(),
+    )
+}

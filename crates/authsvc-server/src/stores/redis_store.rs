@@ -22,6 +22,57 @@ impl RedisSessionStore {
         &self.pool
     }
 
+    pub async fn set_json<T: serde::Serialize>(
+        &self,
+        key: &str,
+        value: &T,
+        ttl_secs: u64,
+    ) -> Result<(), AuthError> {
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let payload =
+            serde_json::to_string(value).map_err(|e| AuthError::Internal(e.to_string()))?;
+        let _: () = conn
+            .set_ex(key, payload, ttl_secs)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn get_json<T: serde::de::DeserializeOwned>(&self, key: &str) -> Result<Option<T>, AuthError> {
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let val: Option<String> = conn
+            .get(key)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        match val {
+            Some(s) => Ok(Some(
+                serde_json::from_str(&s).map_err(|e| AuthError::Internal(e.to_string()))?,
+            )),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn delete_key(&self, key: &str) -> Result<(), AuthError> {
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let _: () = conn
+            .del(key)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
     fn key(session_id: Uuid) -> String {
         format!("session:{session_id}")
     }

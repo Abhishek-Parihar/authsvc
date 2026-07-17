@@ -38,6 +38,7 @@ pub struct Config {
     pub policy_backend: String,
     pub openfga_url: Option<String>,
     pub otel_endpoint: Option<String>,
+    pub webauthn_rp_id: Option<String>,
     #[serde(default)]
     pub cookie_secure: bool,
 }

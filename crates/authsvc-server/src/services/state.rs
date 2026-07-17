@@ -13,6 +13,7 @@ use crate::{
     config::Config,
     crypto::jwt::{JwtSigner, SharedJwtSigner},
     middleware::RateLimiter,
+    services::webauthn::WebAuthnService,
     stores::{PostgresStore, RedisSessionStore},
 };
 
@@ -25,6 +26,7 @@ pub struct AppState {
     pub rate_limiter: RateLimiter,
     pub policy: Arc<CompositeEvaluator>,
     pub idp_registry: Arc<ProviderRegistry>,
+    pub webauthn: Option<Arc<WebAuthnService>>,
 }
 
 impl AppState {
@@ -34,6 +36,7 @@ impl AppState {
         sessions: RedisSessionStore,
         jwt: JwtSigner,
         idp_registry: ProviderRegistry,
+        webauthn: Option<Arc<WebAuthnService>>,
     ) -> Result<Self, AuthError> {
         store.migrate().await?;
         TenantRepository::ensure_default(&store).await?;
@@ -64,6 +67,7 @@ impl AppState {
             rate_limiter,
             policy,
             idp_registry: Arc::new(idp_registry),
+            webauthn,
         })
     }
 

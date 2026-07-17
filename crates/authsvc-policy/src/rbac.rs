@@ -31,10 +31,11 @@ impl PolicyEvaluator for RbacEvaluator {
             .await?;
 
         let allowed = permissions.iter().any(|p| {
-            p.action == req.action
-                && (p.resource == req.resource
-                    || p.resource == "*"
-                    || req.resource.starts_with(&format!("{}/", p.resource)))
+            let action_match = p.action == "*" || p.action == req.action;
+            let resource_match = p.resource == "*"
+                || p.resource == req.resource
+                || req.resource.starts_with(&format!("{}/", p.resource));
+            action_match && resource_match
         });
 
         Ok(AuthzResult {
@@ -45,5 +46,65 @@ impl PolicyEvaluator for RbacEvaluator {
                 Some("no matching permission".into())
             },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use authsvc_core::{AuthzCheck, PolicyEvaluator};
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    struct StubLoader;
+
+    #[async_trait::async_trait]
+    impl PermissionLoader for StubLoader {
+        async fn list_user_permissions(
+            &self,
+            _user_id: Uuid,
+            _tenant_id: Uuid,
+        ) -> Result<Vec<Permission>, AuthError> {
+            Ok(vec![Permission {
+                id: Uuid::new_v4(),
+                tenant_id: Uuid::new_v4(),
+                resource: "orders".into(),
+                action: "read".into(),
+                description: None,
+            }])
+        }
+    }
+
+    #[tokio::test]
+    async fn rbac_allows_matching_permission() {
+        let evaluator = RbacEvaluator::new(Arc::new(StubLoader));
+        let tenant_id = Uuid::new_v4();
+        let result = evaluator
+            .check(&AuthzCheck {
+                subject_id: Uuid::new_v4(),
+                tenant_id,
+                resource: "orders".into(),
+                action: "read".into(),
+                context: None,
+            })
+            .await
+            .expect("check");
+        assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn rbac_denies_missing_permission() {
+        let evaluator = RbacEvaluator::new(Arc::new(StubLoader));
+        let result = evaluator
+            .check(&AuthzCheck {
+                subject_id: Uuid::new_v4(),
+                tenant_id: Uuid::new_v4(),
+                resource: "orders".into(),
+                action: "delete".into(),
+                context: None,
+            })
+            .await
+            .expect("check");
+        assert!(!result.allowed);
     }
 }

@@ -3,6 +3,7 @@ use authsvc_core::{AuthError, AuthzCheck, AuthzResult, PolicyEvaluator};
 use super::state::AppState;
 
 pub async fn check_authorization(state: &AppState, req: AuthzCheck) -> Result<AuthzResult, AuthError> {
+    crate::observability::record_authz_check();
     state.policy.check(&req).await
 }
 

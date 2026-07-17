@@ -103,6 +103,7 @@ pub async fn password_login(
                     serde_json::json!({"email": email}),
                 )
                 .await?;
+            crate::observability::record_login(false);
             return Err(AuthError::InvalidCredentials);
         }
     };
@@ -129,6 +130,7 @@ pub async fn password_login(
                 serde_json::json!({"email": email}),
             )
             .await?;
+        crate::observability::record_login(false);
         return Err(AuthError::InvalidCredentials);
     }
 
@@ -166,6 +168,7 @@ pub async fn password_login(
         .await?
         .ok_or(AuthError::ClientNotFound)?;
 
+    crate::observability::record_login(true);
     issue_user_tokens(state, &user, &client).await
 }
 
@@ -294,6 +297,7 @@ async fn issue_user_tokens_with_family(
         )
         .await?;
 
+    crate::observability::record_token_issued();
     Ok(TokenResponse {
         access_token,
         token_type: "Bearer".into(),

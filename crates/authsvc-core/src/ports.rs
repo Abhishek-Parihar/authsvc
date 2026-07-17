@@ -83,3 +83,27 @@ pub trait SessionStore: Send + Sync {
 pub trait PolicyEvaluator: Send + Sync {
     async fn check(&self, req: &AuthzCheck) -> Result<AuthzResult, AuthError>;
 }
+
+#[derive(Debug, Clone)]
+pub struct WebAuthnCredential {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub credential_id: Vec<u8>,
+    pub public_key: Vec<u8>,
+    pub sign_count: i64,
+    pub name: Option<String>,
+}
+
+#[async_trait]
+pub trait WebAuthnRepository: Send + Sync {
+    async fn store_credential(
+        &self,
+        user_id: Uuid,
+        credential_id: &[u8],
+        public_key: &[u8],
+        name: Option<&str>,
+    ) -> Result<Uuid, AuthError>;
+    async fn list_credentials(&self, user_id: Uuid) -> Result<Vec<WebAuthnCredential>, AuthError>;
+    async fn update_sign_count(&self, id: Uuid, sign_count: i64) -> Result<(), AuthError>;
+    async fn find_user_by_email(&self, tenant_id: Uuid, email: &str) -> Result<Option<User>, AuthError>;
+}
