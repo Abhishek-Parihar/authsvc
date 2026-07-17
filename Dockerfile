@@ -6,11 +6,11 @@ COPY crates ./crates
 COPY migrations ./migrations
 RUN cargo build --release -p authsvc-server
 
-# Runtime stage
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+# Runtime stage (non-root)
+FROM gcr.io/distroless/cc-debian12:nonroot
 WORKDIR /app
 COPY --from=builder /app/target/release/authsvc /usr/local/bin/authsvc
 COPY migrations /app/migrations
 EXPOSE 8080
-CMD ["authsvc"]
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/authsvc"]

@@ -1,56 +1,253 @@
 openapi: 3.0.3
 info:
   title: authsvc API
-  version: 0.2.0
+  version: 0.3.0
   description: Plug-and-play authentication and authorization service
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+    BootstrapSecret:
+      type: http
+      scheme: bearer
+      description: Bootstrap secret as Bearer token for initial admin setup
+  schemas:
+    TokenResponse:
+      type: object
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, example: Bearer }
+        expires_in: { type: integer }
+        refresh_token: { type: string, nullable: true }
+        scope: { type: string }
+        id_token: { type: string, nullable: true }
+    AuthzCheckRequest:
+      type: object
+      required: [subject_id, tenant_id, resource, action]
+      properties:
+        subject_id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        resource: { type: string }
+        action: { type: string }
+        context: { type: object, additionalProperties: true }
+    AuthzResult:
+      type: object
+      properties:
+        allowed: { type: boolean }
+        reason: { type: string, nullable: true }
+    ApiKeyCreateRequest:
+      type: object
+      required: [tenant_id, name, scopes]
+      properties:
+        tenant_id: { type: string, format: uuid }
+        name: { type: string }
+        scopes: { type: array, items: { type: string } }
 paths:
   /health:
     get:
       summary: Liveness probe
+      responses:
+        "200": { description: OK }
   /ready:
     get:
       summary: Readiness probe (Postgres + Redis)
+      responses:
+        "200": { description: Ready }
+        "503": { description: Not ready }
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      responses:
+        "200": { description: Prometheus text }
   /.well-known/openid-configuration:
     get:
       summary: OIDC discovery document
+      responses:
+        "200": { description: Discovery JSON }
   /.well-known/jwks.json:
     get:
-      summary: JSON Web Key Set
+      summary: JSON Web Key Set (active + grace-period keys)
+      responses:
+        "200": { description: JWKS }
   /oauth/token:
     post:
       summary: OAuth2 token endpoint
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [grant_type]
+              properties:
+                grant_type:
+                  type: string
+                  enum:
+                    - password
+                    - refresh_token
+                    - client_credentials
+                    - authorization_code
+                    - api_key
+                client_id: { type: string }
+                client_secret: { type: string }
+                username: { type: string }
+                password: { type: string }
+                refresh_token: { type: string }
+                code: { type: string }
+                redirect_uri: { type: string }
+                code_verifier: { type: string }
+                api_key: { type: string }
+      responses:
+        "200":
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
   /oauth/userinfo:
     get:
       summary: OIDC userinfo
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: User claims }
   /oauth/introspect:
     post:
       summary: RFC 7662 token introspection
+      responses:
+        "200": { description: Introspection result }
   /oauth/authorize:
     get:
       summary: Authorization code flow (PKCE)
+      parameters:
+        - { name: client_id, in: query, required: true, schema: { type: string } }
+        - { name: redirect_uri, in: query, required: true, schema: { type: string } }
+        - { name: response_type, in: query, required: true, schema: { type: string } }
+        - { name: code_challenge, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Login state for browser flow }
   /oauth/login:
     post:
       summary: Browser login for authorization flow
+      responses:
+        "200": { description: Redirect URL with authorization code }
   /oauth/logout:
     post:
       summary: End browser session
+      responses:
+        "204": { description: Logged out }
+  /oauth/federate/{provider}:
+    get:
+      summary: Start federated login (Google, GitHub)
+      parameters:
+        - { name: provider, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Authorization URL }
+  /oauth/federate/{provider}/callback:
+    get:
+      summary: Federated login callback
+      responses:
+        "200": { description: Token response }
   /v1/auth/register:
     post:
       summary: Register user (bootstrap or admin)
+      security:
+        - BootstrapSecret: []
+      responses:
+        "200": { description: User created }
   /v1/clients:
     post:
       summary: Create OAuth client (admin)
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        "200": { description: Client created }
     get:
       summary: List OAuth clients (admin)
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        "200": { description: Client list }
   /v1/authz/check:
     post:
-      summary: RBAC authorization check
+      summary: Authorization check (RBAC, Casbin, or OpenFGA)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthzCheckRequest"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthzResult"
   /v1/mfa/enroll:
     post:
       summary: Enroll TOTP MFA
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: OTPAuth URL and recovery codes }
+  /v1/auth/magic-link/send:
+    post:
+      summary: Send magic link email
+      responses:
+        "200": { description: Link sent (logged in dev) }
   /v1/api-keys:
     post:
       summary: Create API key
+      security:
+        - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApiKeyCreateRequest"
+      responses:
+        "200": { description: API key created }
   /v1/keys/rotate:
     post:
       summary: Rotate JWT signing keys
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: New kid }
+  /v1/roles/{child_id}/inherit/{parent_id}:
+    post:
+      summary: Link child role to parent role for permission inheritance
+      security:
+        - BearerAuth: []
+      responses:
+        "204": { description: Linked }
+    delete:
+      summary: Remove role inheritance link
+      security:
+        - BearerAuth: []
+      responses:
+        "204": { description: Removed }
+  /v1/casbin/rules:
+    post:
+      summary: Create Casbin policy rule
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: Rule created }
+  /v1/webauthn/register/begin:
+    post:
+      summary: Begin WebAuthn registration (admin)
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: Creation challenge }
+  /v1/webauthn/login/begin:
+    post:
+      summary: Begin WebAuthn login
+      responses:
+        "200": { description: Request challenge }

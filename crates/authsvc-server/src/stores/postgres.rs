@@ -294,11 +294,20 @@ impl RoleRepository for PostgresStore {
         tenant_id: Uuid,
     ) -> Result<Vec<Permission>, AuthError> {
         let rows = sqlx::query(
-            "SELECT DISTINCT p.id, p.tenant_id, p.resource, p.action, p.description
-             FROM permissions p
-             JOIN role_permissions rp ON rp.permission_id = p.id
-             JOIN user_roles ur ON ur.role_id = rp.role_id
-             WHERE ur.user_id = $1 AND p.tenant_id = $2",
+            "WITH RECURSIVE effective_roles AS (
+                SELECT ur.role_id
+                FROM user_roles ur
+                WHERE ur.user_id = $1
+                UNION
+                SELECT rh.parent_role_id
+                FROM role_hierarchy rh
+                JOIN effective_roles er ON rh.child_role_id = er.role_id
+            )
+            SELECT DISTINCT p.id, p.tenant_id, p.resource, p.action, p.description
+            FROM permissions p
+            JOIN role_permissions rp ON rp.permission_id = p.id
+            JOIN effective_roles er ON er.role_id = rp.role_id
+            WHERE p.tenant_id = $2",
         )
         .bind(user_id)
         .bind(tenant_id)

@@ -1,4 +1,6 @@
-use authsvc_core::{AuthError, ClientRepository, TenantRepository, UserRepository};
+use authsvc_core::{
+    AuthError, ClientRepository, TenantRepository, UserRepository,
+};
 use chrono::{Duration, Utc};
 use sha2::{Digest, Sha256};
 use totp_rs::{Algorithm as TotpAlgorithm, Secret, TOTP};
@@ -97,7 +99,14 @@ pub async fn send_magic_link(state: &AppState, email: &str) -> Result<String, Au
         "{}/v1/auth/magic-link/verify?token={token}",
         state.config.issuer
     );
-    tracing::info!(email = %email, link = %link, "magic link (log-only notification)");
+    state
+        .notifier
+        .send_email(
+            email,
+            "Your authsvc sign-in link",
+            &format!("Sign in: {link}"),
+        )
+        .await?;
     Ok(link)
 }
 

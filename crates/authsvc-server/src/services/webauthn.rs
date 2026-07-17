@@ -197,7 +197,7 @@ impl WebAuthnService {
         let auth_result = self
             .webauthn
             .finish_passkey_authentication(&auth, &stored.state)
-            .map_err(|e| AuthError::InvalidCredentials)?;
+            .map_err(|_e| AuthError::InvalidCredentials)?;
 
         let creds = state
             .store

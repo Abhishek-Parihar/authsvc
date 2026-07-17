@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use authsvc_core::AuthError;
+use authsvc_core::{AuthError, NotificationSender};
 use authsvc_core::TenantRepository;
 use authsvc_idp::ProviderRegistry;
 use authsvc_policy::{casbin::CasbinEvaluator, openfga::OpenFgaEvaluator, rbac, CompositeEvaluator, PolicyBackend};
@@ -11,9 +11,12 @@ use uuid::Uuid;
 
 use crate::{
     config::Config,
-    crypto::jwt::{JwtSigner, SharedJwtSigner},
+    crypto::jwt::{JwtKeyStore, SharedJwtKeyStore},
     middleware::RateLimiter,
-    services::webauthn::WebAuthnService,
+    services::{
+        notifications::build_notifier,
+        webauthn::WebAuthnService,
+    },
     stores::{PostgresStore, RedisSessionStore},
 };
 
@@ -22,11 +25,12 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub store: PostgresStore,
     pub sessions: RedisSessionStore,
-    pub jwt: SharedJwtSigner,
+    pub jwt: SharedJwtKeyStore,
     pub rate_limiter: RateLimiter,
     pub policy: Arc<CompositeEvaluator>,
     pub idp_registry: Arc<ProviderRegistry>,
     pub webauthn: Option<Arc<WebAuthnService>>,
+    pub notifier: Arc<dyn NotificationSender>,
 }
 
 impl AppState {
@@ -34,12 +38,21 @@ impl AppState {
         config: Config,
         store: PostgresStore,
         sessions: RedisSessionStore,
-        jwt: JwtSigner,
         idp_registry: ProviderRegistry,
         webauthn: Option<Arc<WebAuthnService>>,
     ) -> Result<Self, AuthError> {
         store.migrate().await?;
         TenantRepository::ensure_default(&store).await?;
+
+        let jwt = JwtKeyStore::load_from_db(
+            &store,
+            &config.issuer,
+            config.access_token_ttl_secs,
+            config.jwt_key_grace_secs,
+            config.jwt_private_key_pem.clone(),
+            config.jwt_public_key_pem.clone(),
+        )
+        .await?;
 
         let rate_limiter = RateLimiter::new(
             sessions.pool().clone(),
@@ -47,17 +60,19 @@ impl AppState {
         );
 
         let rbac = RbacEvaluator::new(Arc::new(store.clone()) as Arc<dyn rbac::PermissionLoader>);
-        let casbin = CasbinEvaluator::new("[request_definition]\nr = sub, obj, act");
+        let casbin = CasbinEvaluator::new(Arc::new(store.clone()) as Arc<dyn authsvc_policy::casbin::CasbinPolicyLoader>);
         let openfga = OpenFgaEvaluator::new(
             config.openfga_url.clone().unwrap_or_else(|| "http://localhost:8081".into()),
             "default",
         );
         let policy = Arc::new(CompositeEvaluator::new(
-            PolicyBackend::from_str(&config.policy_backend),
+            PolicyBackend::parse(&config.policy_backend),
             rbac,
             casbin,
             openfga,
         ));
+
+        let notifier = Arc::from(build_notifier());
 
         Ok(Self {
             config: Arc::new(config),
@@ -68,6 +83,7 @@ impl AppState {
             policy,
             idp_registry: Arc::new(idp_registry),
             webauthn,
+            notifier,
         })
     }
 

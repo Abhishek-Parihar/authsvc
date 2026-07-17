@@ -1,5 +1,4 @@
 use authsvc_core::{AuthError, ClientRepository, TenantRepository, UserRepository};
-use authsvc_idp::IdentityProvider;
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 

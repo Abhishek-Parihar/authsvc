@@ -65,6 +65,10 @@ spec:
               value: {{ .Values.env.ISSUER | default .Values.env.AUTHSVC_ISSUER | quote }}
             - name: POLICY_BACKEND
               value: {{ .Values.env.POLICY_BACKEND | quote }}
+            {{- if .Values.env.JWT_KEY_GRACE_SECS }}
+            - name: JWT_KEY_GRACE_SECS
+              value: {{ .Values.env.JWT_KEY_GRACE_SECS | quote }}
+            {{- end }}
             {{- if .Values.env.RATE_LIMIT_PER_MINUTE }}
             - name: RATE_LIMIT_PER_MINUTE
               value: {{ .Values.env.RATE_LIMIT_PER_MINUTE | quote }}

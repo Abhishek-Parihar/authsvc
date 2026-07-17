@@ -29,6 +29,27 @@ pub async fn validate_api_key(state: &AppState, key: &str) -> Result<(Uuid, Uuid
         .ok_or(AuthError::InvalidCredentials)
 }
 
+pub async fn api_key_grant(state: &AppState, api_key: &str) -> Result<super::auth::TokenResponse, AuthError> {
+    let (key_id, tenant_id, scopes) = validate_api_key(state, api_key).await?;
+    let (access_token, _) = state.jwt.issue_access_token(
+        key_id,
+        tenant_id,
+        Some(&format!("apikey:{key_id}")),
+        &scopes,
+    )?;
+
+    Ok(super::auth::TokenResponse {
+        access_token,
+        token_type: "Bearer".into(),
+        expires_in: state.jwt.access_ttl_secs(),
+        refresh_token: None,
+        scope: scopes.join(" "),
+        id_token: None,
+        mfa_required: None,
+        mfa_challenge_id: None,
+    })
+}
+
 pub async fn revoke_api_key(state: &AppState, id: Uuid) -> Result<(), AuthError> {
     state.store.revoke_api_key(id).await
 }

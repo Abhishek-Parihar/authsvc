@@ -15,11 +15,14 @@ ingress:
   className: ""
   host: authsvc.local
   tls: false
+  tlsSecret: authsvc-tls
+  annotations: {}
 
 env:
   ENV: production
   AUTHSVC_PORT: "8080"
   AUTHSVC_ISSUER: "https://authsvc.example.com"
+  JWT_KEY_GRACE_SECS: "86400"
   ACCESS_TOKEN_TTL_SECS: "900"
   REFRESH_TOKEN_TTL_SECS: "604800"
   SESSION_TTL_SECS: "86400"
@@ -35,11 +38,11 @@ secrets:
 
 resources:
   limits:
-    cpu: 500m
-    memory: 512Mi
+    cpu: 1000m
+    memory: 1Gi
   requests:
     cpu: 100m
-    memory: 128Mi
+    memory: 256Mi
 
 livenessProbe:
   path: /health

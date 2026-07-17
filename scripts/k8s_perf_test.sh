@@ -37,6 +37,13 @@ monitor_resources() {
       while read -r pod cpu mem _rest; do
         [[ -z "$pod" ]] && continue
         cpu_val="${cpu%m}"
+        if [[ "$cpu" == *m ]]; then
+          cpu_val=$(python3 -c "print(round(float('${cpu%m}')/1000, 4))")
+        elif [[ "$cpu" == *n ]]; then
+          cpu_val=$(python3 -c "print(round(float('${cpu%n}')/1000000000, 6))")
+        else
+          cpu_val="$cpu"
+        fi
         if [[ "$mem" == *Gi ]]; then
           mem_val=$(python3 -c "print(round(float('${mem%Gi}')*1024, 1))")
         elif [[ "$mem" == *Mi ]]; then

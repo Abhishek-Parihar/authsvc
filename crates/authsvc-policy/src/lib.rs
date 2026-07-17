@@ -12,7 +12,7 @@ pub enum PolicyBackend {
 }
 
 impl PolicyBackend {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "casbin" => Self::Casbin,
             "openfga" => Self::OpenFga,
@@ -23,6 +23,7 @@ impl PolicyBackend {
 
 pub struct CompositeEvaluator {
     inner: Box<dyn PolicyEvaluator>,
+    casbin: Option<std::sync::Arc<casbin::CasbinEvaluator>>,
 }
 
 impl CompositeEvaluator {
@@ -32,12 +33,22 @@ impl CompositeEvaluator {
         casbin: casbin::CasbinEvaluator,
         openfga: openfga::OpenFgaEvaluator,
     ) -> Self {
+        let casbin_arc = std::sync::Arc::new(casbin);
         let inner: Box<dyn PolicyEvaluator> = match backend {
-            PolicyBackend::Casbin => Box::new(casbin),
+            PolicyBackend::Casbin => Box::new(casbin::CasbinEvalWrapper(casbin_arc.clone())),
             PolicyBackend::OpenFga => Box::new(openfga),
             PolicyBackend::Rbac => Box::new(rbac),
         };
-        Self { inner }
+        Self {
+            inner,
+            casbin: Some(casbin_arc),
+        }
+    }
+
+    pub fn invalidate_casbin(&self, tenant_id: uuid::Uuid) {
+        if let Some(c) = &self.casbin {
+            c.invalidate_tenant(tenant_id);
+        }
     }
 }
 

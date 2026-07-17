@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::{
     handlers::{auth::extract_bearer_user, ApiError, AppResult, SharedState},
+    middleware::{authenticate, AuthContext},
     services::authz::check_authorization,
 };
 
@@ -34,7 +35,8 @@ pub async fn openid_configuration(
             "authorization_code",
             "client_credentials",
             "password",
-            "refresh_token"
+            "refresh_token",
+            "api_key"
         ],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
@@ -63,13 +65,24 @@ pub struct AuthzCheckRequest {
 
 pub async fn check(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(body): Json<AuthzCheckRequest>,
 ) -> AppResult<Json<AuthzResult>> {
+    let tenant_id = Uuid::parse_str(&body.tenant_id)
+        .map_err(|_| AuthError::Validation("invalid tenant_id".into()))?;
+
+    if let Ok(AuthContext::ApiKey { tenant_id: key_tenant, .. }) =
+        authenticate(&state, &headers).await
+    {
+        if key_tenant != tenant_id {
+            return Err(ApiError(AuthError::Forbidden));
+        }
+    }
+
     let req = AuthzCheck {
         subject_id: Uuid::parse_str(&body.subject_id)
             .map_err(|_| AuthError::Validation("invalid subject_id".into()))?,
-        tenant_id: Uuid::parse_str(&body.tenant_id)
-            .map_err(|_| AuthError::Validation("invalid tenant_id".into()))?,
+        tenant_id,
         action: body.action,
         resource: body.resource,
         context: body.context,
@@ -87,7 +100,7 @@ pub async fn userinfo(
         .map_err(|_| ApiError(AuthError::InvalidToken))?;
     let user = UserRepository::find_by_id(&state.store, user_id)
         .await?
-        .ok_or_else(|| ApiError(AuthError::UserNotFound))?;
+        .ok_or(ApiError(AuthError::UserNotFound))?;
     Ok(Json(json!({
         "sub": user.id,
         "email": user.email,
@@ -152,7 +165,7 @@ pub async fn authorize(
 
     let client = ClientRepository::find_by_client_id(&state.store, &q.client_id)
         .await?
-        .ok_or_else(|| ApiError(AuthError::ClientNotFound))?;
+        .ok_or(ApiError(AuthError::ClientNotFound))?;
 
     if !client.redirect_uris.is_empty()
         && !client.redirect_uris.contains(&q.redirect_uri)
@@ -202,7 +215,7 @@ pub async fn oauth_login(
         .store
         .get_login_state(&body.login_state)
         .await?
-        .ok_or_else(|| ApiError(AuthError::InvalidToken))?;
+        .ok_or(ApiError(AuthError::InvalidToken))?;
 
     let (client_id, redirect_uri, code_challenge, scopes) = login;
     let tenant = TenantRepository::find_by_slug(&state.store, &state.config.default_tenant_slug)
@@ -213,12 +226,12 @@ pub async fn oauth_login(
         .store
         .find_by_email(tenant.id, &body.email.to_lowercase())
         .await?
-        .ok_or_else(|| ApiError(AuthError::InvalidCredentials))?;
+        .ok_or(ApiError(AuthError::InvalidCredentials))?;
 
     let hash = user
         .password_hash
         .as_deref()
-        .ok_or_else(|| ApiError(AuthError::InvalidCredentials))?;
+        .ok_or(ApiError(AuthError::InvalidCredentials))?;
     if !crate::crypto::password::verify_password(&body.password, hash)? {
         return Err(ApiError(AuthError::InvalidCredentials));
     }

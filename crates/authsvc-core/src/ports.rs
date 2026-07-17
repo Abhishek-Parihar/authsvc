@@ -84,6 +84,11 @@ pub trait PolicyEvaluator: Send + Sync {
     async fn check(&self, req: &AuthzCheck) -> Result<AuthzResult, AuthError>;
 }
 
+#[async_trait]
+pub trait NotificationSender: Send + Sync {
+    async fn send_email(&self, to: &str, subject: &str, body: &str) -> Result<(), AuthError>;
+}
+
 #[derive(Debug, Clone)]
 pub struct WebAuthnCredential {
     pub id: Uuid,

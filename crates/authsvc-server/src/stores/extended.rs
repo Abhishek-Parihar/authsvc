@@ -112,7 +112,127 @@ impl PostgresStore {
         })
     }
 
+    pub async fn add_role_inheritance(
+        &self,
+        child_role_id: Uuid,
+        parent_role_id: Uuid,
+    ) -> Result<(), AuthError> {
+        sqlx::query(
+            "INSERT INTO role_hierarchy (child_role_id, parent_role_id) VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(child_role_id)
+        .bind(parent_role_id)
+        .execute(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn remove_role_inheritance(
+        &self,
+        child_role_id: Uuid,
+        parent_role_id: Uuid,
+    ) -> Result<(), AuthError> {
+        sqlx::query(
+            "DELETE FROM role_hierarchy WHERE child_role_id = $1 AND parent_role_id = $2",
+        )
+        .bind(child_role_id)
+        .bind(parent_role_id)
+        .execute(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn attach_permission_to_role(
+        &self,
+        role_id: Uuid,
+        permission_id: Uuid,
+    ) -> Result<(), AuthError> {
+        sqlx::query(
+            "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(role_id)
+        .bind(permission_id)
+        .execute(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_casbin_rule(
+        &self,
+        tenant_id: Uuid,
+        ptype: &str,
+        v0: Option<&str>,
+        v1: Option<&str>,
+        v2: Option<&str>,
+        v3: Option<&str>,
+        v4: Option<&str>,
+        v5: Option<&str>,
+    ) -> Result<i32, AuthError> {
+        let row = sqlx::query(
+            "INSERT INTO casbin_rules (tenant_id, ptype, v0, v1, v2, v3, v4, v5)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
+        )
+        .bind(tenant_id)
+        .bind(ptype)
+        .bind(v0)
+        .bind(v1)
+        .bind(v2)
+        .bind(v3)
+        .bind(v4)
+        .bind(v5)
+        .fetch_one(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(row.get("id"))
+    }
+
+    pub async fn delete_casbin_rule(&self, id: i32) -> Result<(), AuthError> {
+        sqlx::query("DELETE FROM casbin_rules WHERE id = $1")
+            .bind(id)
+            .execute(self.pool())
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn list_casbin_rules(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<Vec<(i32, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)>, AuthError>
+    {
+        let rows = sqlx::query(
+            "SELECT id, ptype, v0, v1, v2, v3, v4, v5 FROM casbin_rules WHERE tenant_id = $1 ORDER BY id",
+        )
+        .bind(tenant_id)
+        .fetch_all(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                (
+                    r.get("id"),
+                    r.get("ptype"),
+                    r.get("v0"),
+                    r.get("v1"),
+                    r.get("v2"),
+                    r.get("v3"),
+                    r.get("v4"),
+                    r.get("v5"),
+                )
+            })
+            .collect())
+    }
+
     // --- OIDC authorization codes ---
+    #[allow(clippy::too_many_arguments)]
     pub async fn store_auth_code(
         &self,
         code: &str,
@@ -523,6 +643,32 @@ impl PostgresStore {
             .collect())
     }
 
+    pub async fn record_webhook_delivery(
+        &self,
+        id: Uuid,
+        webhook_id: Uuid,
+        event: &str,
+        status: &str,
+        attempts: i32,
+        last_error: Option<&str>,
+    ) -> Result<(), AuthError> {
+        sqlx::query(
+            "INSERT INTO webhook_deliveries (id, webhook_id, event, status, attempts, last_error)
+             VALUES ($1,$2,$3,$4,$5,$6)
+             ON CONFLICT (id) DO UPDATE SET status = $4, attempts = $5, last_error = $6, updated_at = NOW()",
+        )
+        .bind(id)
+        .bind(webhook_id)
+        .bind(event)
+        .bind(status)
+        .bind(attempts)
+        .bind(last_error)
+        .execute(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
     // --- Signing keys ---
     pub async fn store_signing_key(&self, kid: &str, private_pem: &str, public_pem: &str) -> Result<(), AuthError> {
         sqlx::query(
@@ -538,11 +684,38 @@ impl PostgresStore {
         Ok(())
     }
 
-    pub async fn list_active_signing_keys(&self) -> Result<Vec<(String, String)>, AuthError> {
-        let rows = sqlx::query("SELECT kid, public_key_pem FROM signing_keys WHERE active = TRUE")
-            .fetch_all(self.pool())
-            .await
-            .map_err(|e| AuthError::Internal(e.to_string()))?;
+    pub async fn get_active_signing_key(
+        &self,
+    ) -> Result<Option<(String, String, String)>, AuthError> {
+        let row = sqlx::query(
+            "SELECT kid, private_key_pem, public_key_pem FROM signing_keys
+             WHERE active = TRUE ORDER BY created_at DESC LIMIT 1",
+        )
+        .fetch_optional(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(row.map(|r| {
+            (
+                r.get("kid"),
+                r.get("private_key_pem"),
+                r.get("public_key_pem"),
+            )
+        }))
+    }
+
+    pub async fn list_signing_keys_for_jwks(
+        &self,
+        grace_secs: u64,
+    ) -> Result<Vec<(String, String)>, AuthError> {
+        let rows = sqlx::query(
+            "SELECT kid, public_key_pem FROM signing_keys
+             WHERE active = TRUE
+                OR (rotated_at IS NOT NULL AND rotated_at > NOW() - make_interval(secs => $1::double precision))",
+        )
+        .bind(grace_secs as f64)
+        .fetch_all(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
         Ok(rows
             .into_iter()
             .map(|r| (r.get("kid"), r.get("public_key_pem")))

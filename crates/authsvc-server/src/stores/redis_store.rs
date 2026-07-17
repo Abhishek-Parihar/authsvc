@@ -124,3 +124,30 @@ impl SessionStore for RedisSessionStore {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug)]
+    struct ChallengePayload {
+        value: String,
+    }
+
+    #[tokio::test]
+    async fn json_roundtrip_requires_redis() {
+        let Ok(redis_url) = std::env::var("REDIS_URL") else {
+            return;
+        };
+        let store = RedisSessionStore::new(&redis_url).expect("redis");
+        let key = format!("test:webauthn:{}", Uuid::new_v4());
+        let payload = ChallengePayload {
+            value: "challenge-bytes".into(),
+        };
+        store.set_json(&key, &payload, 30).await.expect("set");
+        let loaded: ChallengePayload = store.get_json(&key).await.expect("get").expect("some");
+        assert_eq!(loaded, payload);
+        store.delete_key(&key).await.expect("del");
+    }
+}

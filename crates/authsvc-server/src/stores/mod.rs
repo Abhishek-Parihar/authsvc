@@ -1,3 +1,4 @@
+pub mod casbin_loader;
 pub mod extended;
 pub mod policy_loader;
 pub mod postgres;

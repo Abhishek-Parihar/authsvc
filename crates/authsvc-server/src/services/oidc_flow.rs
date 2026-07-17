@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::state::AppState;
-use crate::crypto::password::{generate_refresh_token, hash_token};
+use crate::crypto::password::generate_refresh_token;
 
 pub async fn authorization_code_grant(
     state: &AppState,

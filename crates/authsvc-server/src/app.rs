@@ -14,12 +14,12 @@ use tower_http::{
 
 use crate::{
     config::Config,
-    crypto::jwt::JwtSigner,
     handlers::{
         admin::{
-            assign_user_role, create_api_key_handler, create_permission, create_role, create_tenant,
-            create_webhook, delete_client, get_tenant, list_clients, revoke_api_key_handler,
-            rotate_keys as admin_rotate_keys,
+            add_role_inheritance, assign_user_role, create_api_key_handler, create_casbin_rule,
+            create_permission, create_role, create_tenant, create_webhook, delete_casbin_rule,
+            delete_client, get_tenant, list_casbin_rules, list_clients, remove_role_inheritance,
+            revoke_api_key_handler, rotate_keys as admin_rotate_keys,
         },
         auth::{
             complete_mfa, create_client, magic_link_send, magic_link_verify, mfa_disable, mfa_enroll,
@@ -49,12 +49,6 @@ pub async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
 
     let store = PostgresStore::new(pool);
     let sessions = RedisSessionStore::new(&config.redis_url)?;
-    let jwt = JwtSigner::new(
-        &config.issuer,
-        config.access_token_ttl_secs,
-        config.jwt_private_key_pem.clone(),
-        config.jwt_public_key_pem.clone(),
-    )?;
 
     let mut idp_registry = ProviderRegistry::new();
     if let (Ok(g_id), Ok(g_sec)) = (
@@ -85,7 +79,7 @@ pub async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
         .map(Arc::new);
 
     Ok(Arc::new(
-        AppState::new(config, store, sessions, jwt, idp_registry, webauthn).await?,
+        AppState::new(config, store, sessions, idp_registry, webauthn).await?,
     ))
 }
 
@@ -146,10 +140,17 @@ pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometh
         .route("/v1/tenants", post(create_tenant))
         .route("/v1/tenants/{id}", get(get_tenant))
         .route("/v1/roles", post(create_role))
+        .route(
+            "/v1/roles/{child_id}/inherit/{parent_id}",
+            post(add_role_inheritance).delete(remove_role_inheritance),
+        )
         .route("/v1/permissions", post(create_permission))
         .route("/v1/users/{id}/roles", post(assign_user_role))
         .route("/v1/api-keys", post(create_api_key_handler))
         .route("/v1/api-keys/{id}", axum::routing::delete(revoke_api_key_handler))
+        .route("/v1/casbin/rules", post(create_casbin_rule))
+        .route("/v1/casbin/rules/{id}", axum::routing::delete(delete_casbin_rule))
+        .route("/v1/casbin/rules/tenant/{tenant_id}", get(list_casbin_rules))
         .route("/v1/webhooks", post(create_webhook))
         .route("/v1/keys/rotate", post(admin_rotate_keys))
         .route("/v1/mfa/enroll", post(mfa_enroll))

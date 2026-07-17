@@ -1,4 +1,4 @@
-# authsvc v0.2
+# authsvc v0.3
 
 Plug-and-play Rust authentication and authorization service.
 
@@ -6,28 +6,30 @@ Plug-and-play Rust authentication and authorization service.
 
 | Phase | Capability |
 |-------|------------|
-| **Auth** | Password, client_credentials, refresh_token (rotation + reuse detection), authorization_code + PKCE |
-| **OIDC** | Discovery, JWKS, userinfo, introspection, ID tokens |
-| **MFA** | TOTP enroll/verify/disable, magic links |
+| **Auth** | Password, client_credentials, refresh_token (rotation + reuse detection), authorization_code + PKCE, **api_key grant** |
+| **OIDC** | Discovery, JWKS (multi-key + grace period), userinfo, introspection, ID tokens |
+| **MFA** | TOTP enroll/verify/disable, magic links (log or SMTP HTTP relay) |
 | **Federation** | Google, GitHub, generic OIDC (pluggable `authsvc-idp` crate) |
-| **Authz** | RBAC + Casbin/OpenFGA policy adapters (`authsvc-policy`) |
-| **Machine** | API keys |
-| **Ops** | Audit log, webhooks, JWT key rotation, Helm chart |
+| **Authz** | RBAC with **role hierarchy**, real **Casbin** policies, OpenFGA adapter |
+| **Machine** | API keys (`Authorization: ApiKey` or `X-Api-Key`, `grant_type=api_key`) |
+| **Ops** | Audit log, **webhook retries**, JWT key rotation with hot reload, Helm + kind local k8s |
 
 ## Workspace
 
 ```
 crates/
-├── authsvc-core/      # Domain + ports
+├── authsvc-core/      # Domain + ports (incl. NotificationSender)
 ├── authsvc-server/    # Axum HTTP server
 ├── authsvc-client/    # Rust JWKS validator + middleware
 ├── authsvc-idp/       # Federated identity providers
 └── authsvc-policy/    # RBAC, Casbin, OpenFGA backends
 sdk/
 ├── go/authclient/     # Go middleware
-├── typescript/        # TS JWKS client stub
+├── typescript/        # TS SDK (jose + ApiKeyClient)
 └── python/            # Python PyJWT client
-deploy/helm/authsvc/   # Kubernetes Helm chart
+deploy/helm/authsvc/   # Kubernetes Helm chart (optional Ingress)
+deploy/kind/           # Local kind cluster values
+scripts/               # perf_test.sh, k8s_local_up.sh, k8s_perf_test.sh
 ```
 
 ## Quick start
@@ -52,16 +54,33 @@ curl -s -X POST http://localhost:8080/v1/auth/register \
   -H 'Content-Type: application/json' \
   -d '{"email":"admin@example.com","password":"securepass123"}' | jq
 
-# 3. Get tokens
+# 3. Get tokens (password grant)
 curl -s -X POST http://localhost:8080/oauth/token \
   -H 'Content-Type: application/json' \
   -d '{"grant_type":"password","client_id":"<id>","username":"admin@example.com","password":"securepass123"}' | jq
 
-# 4. Authz check
+# 4. API key grant
+curl -s -X POST http://localhost:8080/oauth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"grant_type":"api_key","api_key":"ak_..."}' | jq
+
+# 5. Authz check
 curl -s -X POST http://localhost:8080/v1/authz/check \
   -H 'Content-Type: application/json' \
   -d '{"subject_id":"<user_id>","tenant_id":"<tenant_id>","action":"read","resource":"users"}' | jq
 ```
+
+## Environment
+
+| Variable | Description |
+|----------|-------------|
+| `JWT_PRIVATE_KEY_PEM` / `JWT_PUBLIC_KEY_PEM` | Required in production; persisted to `signing_keys` on first boot |
+| `JWT_KEY_GRACE_SECS` | How long rotated public keys stay in JWKS (default `86400`) |
+| `POLICY_BACKEND` | `rbac` (default), `casbin`, or `openfga` |
+| `SMTP_URL` | Optional HTTP mail relay for magic links (`SMTP_FROM` optional) |
+| `BOOTSTRAP_SECRET` | Admin bootstrap bearer token |
+
+Permissions are **not** embedded in JWT access tokens; use `/v1/authz/check` for fine-grained authorization.
 
 ## Consumer SDKs
 
@@ -81,6 +100,18 @@ let validator = JwksValidator::new(issuer, jwks_uri);
 let claims = validator.validate(&token).await?;
 ```
 
+### TypeScript
+
+```bash
+cd sdk/typescript && npm install && npm run build
+```
+
+```typescript
+import { JwksValidator, ApiKeyClient } from "@authsvc/client";
+const v = new JwksValidator("http://localhost:8080", "http://localhost:8080/.well-known/jwks.json");
+const claims = await v.validate(accessToken);
+```
+
 ### Python
 
 ```python
@@ -91,10 +122,23 @@ claims = v.validate(access_token)
 
 ## Production
 
-- Set `ENV=production` and `JWT_*_KEY_PEM`
+- Set `ENV=production` and `JWT_*_KEY_PEM` (or rely on DB-backed keys after first persist)
 - Set `BOOTSTRAP_SECRET` and protect admin routes
-- Deploy via `deploy/helm/authsvc/`
+- Deploy via `deploy/helm/authsvc/` — enable `ingress.enabled`, set `secrets.jwt*`, memory `1Gi` recommended
+- Distroless non-root Docker image: `docker build -t authsvc .`
 - See `api/openapi.yaml` for full API surface
+
+## Local Kubernetes (kind)
+
+```bash
+./scripts/k8s_local_up.sh
+./scripts/k8s_perf_test.sh
+./scripts/k8s_local_down.sh
+```
+
+## Out of scope
+
+SAML, gRPC gateway, admin UI, and vananam platform integration are documented as future work.
 
 ## License
 

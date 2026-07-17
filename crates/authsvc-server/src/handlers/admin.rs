@@ -161,3 +161,96 @@ pub async fn rotate_keys(
     let kid = crate::services::ops::rotate_keys(&state).await?;
     Ok(Json(json!({"kid": kid, "rotated": true})))
 }
+
+#[derive(Debug, Deserialize)]
+pub struct CreateCasbinRuleRequest {
+    pub tenant_id: String,
+    pub ptype: String,
+    pub v0: Option<String>,
+    pub v1: Option<String>,
+    pub v2: Option<String>,
+    pub v3: Option<String>,
+    pub v4: Option<String>,
+    pub v5: Option<String>,
+}
+
+pub async fn create_casbin_rule(
+    State(state): State<SharedState>,
+    Json(body): Json<CreateCasbinRuleRequest>,
+) -> AppResult<impl axum::response::IntoResponse> {
+    let tenant_id = Uuid::parse_str(&body.tenant_id)
+        .map_err(|_| ApiError(AuthError::Validation("invalid tenant_id".into())))?;
+    let id = state
+        .store
+        .create_casbin_rule(
+            tenant_id,
+            &body.ptype,
+            body.v0.as_deref(),
+            body.v1.as_deref(),
+            body.v2.as_deref(),
+            body.v3.as_deref(),
+            body.v4.as_deref(),
+            body.v5.as_deref(),
+        )
+        .await?;
+    state.policy.invalidate_casbin(tenant_id);
+    Ok(Json(json!({"id": id})))
+}
+
+pub async fn delete_casbin_rule(
+    State(state): State<SharedState>,
+    Path(id): Path<i32>,
+) -> AppResult<impl axum::response::IntoResponse> {
+    state.store.delete_casbin_rule(id).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+pub async fn list_casbin_rules(
+    State(state): State<SharedState>,
+    Path(tenant_id): Path<Uuid>,
+) -> AppResult<impl axum::response::IntoResponse> {
+    let rules = state.store.list_casbin_rules(tenant_id).await?;
+    Ok(Json(json!({"rules": rules})))
+}
+
+pub async fn add_role_inheritance(
+    State(state): State<SharedState>,
+    Path((child_id, parent_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<impl axum::response::IntoResponse> {
+    state
+        .store
+        .add_role_inheritance(child_id, parent_id)
+        .await?;
+    state
+        .audit(
+            None,
+            None,
+            "roles.inherit",
+            Some("role_hierarchy"),
+            None,
+            json!({"child_role_id": child_id, "parent_role_id": parent_id}),
+        )
+        .await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+pub async fn remove_role_inheritance(
+    State(state): State<SharedState>,
+    Path((child_id, parent_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<impl axum::response::IntoResponse> {
+    state
+        .store
+        .remove_role_inheritance(child_id, parent_id)
+        .await?;
+    state
+        .audit(
+            None,
+            None,
+            "roles.uninherit",
+            Some("role_hierarchy"),
+            None,
+            json!({"child_role_id": child_id, "parent_role_id": parent_id}),
+        )
+        .await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}

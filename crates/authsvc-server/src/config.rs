@@ -41,6 +41,8 @@ pub struct Config {
     pub webauthn_rp_id: Option<String>,
     #[serde(default)]
     pub cookie_secure: bool,
+    #[serde(default = "default_jwt_key_grace_secs")]
+    pub jwt_key_grace_secs: u64,
 }
 
 fn default_host() -> String {
@@ -82,6 +84,9 @@ fn default_rate_limit() -> u32 {
 fn default_policy_backend() -> String {
     "rbac".into()
 }
+fn default_jwt_key_grace_secs() -> u64 {
+    86400
+}
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
@@ -111,10 +116,10 @@ impl Config {
         cfg.otel_endpoint = empty_as_none(cfg.otel_endpoint);
         cfg.webauthn_rp_id = empty_as_none(cfg.webauthn_rp_id);
 
-        if cfg.env == "production" {
-            if cfg.jwt_private_key_pem.is_none() || cfg.jwt_public_key_pem.is_none() {
-                anyhow::bail!("JWT_PRIVATE_KEY_PEM and JWT_PUBLIC_KEY_PEM required in production");
-            }
+        if cfg.env == "production"
+            && (cfg.jwt_private_key_pem.is_none() || cfg.jwt_public_key_pem.is_none())
+        {
+            anyhow::bail!("JWT_PRIVATE_KEY_PEM and JWT_PUBLIC_KEY_PEM required in production");
         }
 
         Ok(cfg)

@@ -1,7 +1,7 @@
 use axum::{
     extract::State,
     http::{header::AUTHORIZATION, StatusCode},
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     Json,
 };
 use authsvc_core::AuthError;
@@ -16,6 +16,7 @@ use crate::{
             client_credentials_grant, create_oauth_client, password_login, refresh_token_grant,
             register_user, revoke_refresh_token, validate_bearer_token,
         },
+        api_keys::api_key_grant,
         authz::complete_mfa_login,
         mfa::{disable_mfa, enroll_totp, send_magic_link, verify_magic_link},
         oidc_flow::authorization_code_grant,
@@ -80,6 +81,7 @@ pub struct TokenRequest {
     pub code: Option<String>,
     pub redirect_uri: Option<String>,
     pub code_verifier: Option<String>,
+    pub api_key: Option<String>,
 }
 
 pub async fn token(
@@ -97,6 +99,7 @@ pub async fn token(
         code: None,
         redirect_uri: None,
         code_verifier: None,
+        api_key: None,
     });
 
     if let Some(auth) = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()) {
@@ -168,6 +171,13 @@ pub async fn token(
                 &client_id,
             )
             .await?;
+            Ok(Json(tokens))
+        }
+        "api_key" => {
+            let api_key = req.api_key.ok_or_else(|| {
+                ApiError(AuthError::Validation("api_key required".into()))
+            })?;
+            let tokens = api_key_grant(&state, &api_key).await?;
             Ok(Json(tokens))
         }
         other => Err(ApiError(AuthError::UnsupportedGrantType(other.into()))),
@@ -278,9 +288,9 @@ pub async fn extract_bearer_user(
     let hdr = headers
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| ApiError(AuthError::InvalidToken))?;
+        .ok_or(ApiError(AuthError::InvalidToken))?;
     let token = hdr
         .strip_prefix("Bearer ")
-        .ok_or_else(|| ApiError(AuthError::InvalidToken))?;
+        .ok_or(ApiError(AuthError::InvalidToken))?;
     Ok(validate_bearer_token(state, token).await?)
 }
