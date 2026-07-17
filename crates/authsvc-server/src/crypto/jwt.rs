@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use authsvc_core::AuthError;
+use authsvc_core::{AuthError, User};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
-use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
+use rsa::pkcs8::{DecodePublicKey, EncodePrivateKey, EncodePublicKey};
 use rsa::RsaPrivateKey;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -19,6 +19,19 @@ pub struct AccessTokenClaims {
     pub client_id: Option<String>,
     pub scope: String,
     pub token_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdTokenClaims {
+    pub sub: String,
+    pub iss: String,
+    pub aud: Vec<String>,
+    pub exp: usize,
+    pub iat: usize,
+    pub email: Option<String>,
+    pub email_verified: bool,
+    pub name: Option<String>,
+    pub tenant_id: String,
 }
 
 #[derive(Clone)]
@@ -81,8 +94,8 @@ impl JwtSigner {
         &self.kid
     }
 
-    pub fn public_pem(&self) -> &str {
-        &self.public_pem
+    pub fn access_ttl_secs(&self) -> u64 {
+        self.access_ttl_secs
     }
 
     pub fn issue_access_token(
@@ -112,6 +125,24 @@ impl JwtSigner {
         let token = encode(&header, &claims, &self.encoding)
             .map_err(|e| AuthError::Internal(e.to_string()))?;
         Ok((token, claims))
+    }
+
+    pub fn issue_id_token(&self, user: &User) -> Result<String, AuthError> {
+        let now = chrono::Utc::now().timestamp() as usize;
+        let claims = IdTokenClaims {
+            sub: user.id.to_string(),
+            iss: self.issuer.clone(),
+            aud: vec!["authsvc".into()],
+            exp: now + self.access_ttl_secs as usize,
+            iat: now,
+            email: Some(user.email.clone()),
+            email_verified: user.email_verified,
+            name: user.display_name.clone(),
+            tenant_id: user.tenant_id.to_string(),
+        };
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some(self.kid.clone());
+        encode(&header, &claims, &self.encoding).map_err(|e| AuthError::Internal(e.to_string()))
     }
 
     pub fn validate_access_token(&self, token: &str) -> Result<AccessTokenClaims, AuthError> {
@@ -151,3 +182,18 @@ impl JwtSigner {
 }
 
 pub type SharedJwtSigner = Arc<JwtSigner>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jwt_issue_and_validate() {
+        let signer = JwtSigner::new("http://localhost", 900, None, None).unwrap();
+        let (token, _) = signer
+            .issue_access_token(Uuid::new_v4(), Uuid::new_v4(), Some("cli_test"), &["openid".into()])
+            .unwrap();
+        let claims = signer.validate_access_token(&token).unwrap();
+        assert_eq!(claims.client_id.as_deref(), Some("cli_test"));
+    }
+}

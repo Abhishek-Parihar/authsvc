@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS signing_keys;
+DROP TABLE IF EXISTS webhooks;
+DROP TABLE IF EXISTS audit_events;

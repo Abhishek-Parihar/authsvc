@@ -452,6 +452,41 @@ impl PostgresStore {
         }
         Ok(())
     }
+
+    pub async fn count_users(&self) -> Result<i64, AuthError> {
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(row.0)
+    }
+
+    pub async fn set_locked_until(&self, user_id: Uuid, until: DateTime<Utc>) -> Result<(), AuthError> {
+        sqlx::query("UPDATE users SET locked_until = $1, updated_at = NOW() WHERE id = $2")
+            .bind(until)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn clear_lock(&self, user_id: Uuid) -> Result<(), AuthError> {
+        sqlx::query("UPDATE users SET locked_until = NULL, updated_at = NOW() WHERE id = $1")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn ping(&self) -> Result<(), AuthError> {
+        sqlx::query("SELECT 1")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(())
+    }
 }
 
 fn map_user(r: sqlx::postgres::PgRow) -> User {

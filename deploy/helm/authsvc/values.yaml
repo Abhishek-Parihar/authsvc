@@ -1,0 +1,48 @@
+replicaCount: 1
+
+image:
+  repository: authsvc
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  host: authsvc.local
+  tls: false
+
+env:
+  ENV: production
+  AUTHSVC_PORT: "8080"
+  AUTHSVC_ISSUER: "https://authsvc.example.com"
+  ACCESS_TOKEN_TTL_SECS: "900"
+  REFRESH_TOKEN_TTL_SECS: "604800"
+  SESSION_TTL_SECS: "86400"
+  POLICY_BACKEND: rbac
+
+secrets:
+  databaseUrl: "postgres://authsvc:authsvc@postgres:5432/authsvc"
+  redisUrl: "redis://redis:6379"
+  jwtPrivateKeyPem: ""
+  jwtPublicKeyPem: ""
+  bootstrapSecret: ""
+  mfaEncryptionKey: ""
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+livenessProbe:
+  path: /health
+  port: 8080
+readinessProbe:
+  path: /ready
+  port: 8080

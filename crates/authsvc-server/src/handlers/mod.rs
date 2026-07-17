@@ -1,5 +1,4 @@
 use axum::{
-    extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -7,11 +6,13 @@ use axum::{
 use authsvc_core::AuthError;
 use serde_json::json;
 
+pub mod admin;
 pub mod auth;
-pub mod authz;
+pub mod federation;
+pub mod health;
 pub mod oidc;
 
-pub struct ApiError(AuthError);
+pub struct ApiError(pub AuthError);
 
 impl From<AuthError> for ApiError {
     fn from(value: AuthError) -> Self {
@@ -49,10 +50,6 @@ impl IntoResponse for ApiError {
         )
             .into_response()
     }
-}
-
-pub async fn health() -> impl IntoResponse {
-    Json(json!({ "status": "ok", "service": "authsvc" }))
 }
 
 pub type AppResult<T> = Result<T, ApiError>;

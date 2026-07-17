@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "authsvc.fullname" . }}
+  labels:
+    app.kubernetes.io/name: authsvc
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: authsvc
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: authsvc
+    spec:
+      containers:
+        - name: authsvc
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.port }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "authsvc.fullname" . }}
+                  key: database-url
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "authsvc.fullname" . }}
+                  key: redis-url
+            - name: JWT_PRIVATE_KEY_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "authsvc.fullname" . }}
+                  key: jwt-private-key-pem
+            - name: JWT_PUBLIC_KEY_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "authsvc.fullname" . }}
+                  key: jwt-public-key-pem
+            - name: BOOTSTRAP_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "authsvc.fullname" . }}
+                  key: bootstrap-secret
+            - name: MFA_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "authsvc.fullname" . }}
+                  key: mfa-encryption-key
+            - name: ENV
+              value: {{ .Values.env.ENV | quote }}
+            - name: AUTHSVC_ISSUER
+              value: {{ .Values.env.AUTHSVC_ISSUER | quote }}
+            - name: POLICY_BACKEND
+              value: {{ .Values.env.POLICY_BACKEND | quote }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.livenessProbe.path }}
+              port: {{ .Values.livenessProbe.port }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.readinessProbe.path }}
+              port: {{ .Values.readinessProbe.port }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

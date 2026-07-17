@@ -18,6 +18,10 @@ impl RedisSessionStore {
         Ok(Self { pool })
     }
 
+    pub fn pool(&self) -> &Pool {
+        &self.pool
+    }
+
     fn key(session_id: Uuid) -> String {
         format!("session:{session_id}")
     }

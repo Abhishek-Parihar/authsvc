@@ -1,0 +1,56 @@
+openapi: 3.0.3
+info:
+  title: authsvc API
+  version: 0.2.0
+  description: Plug-and-play authentication and authorization service
+paths:
+  /health:
+    get:
+      summary: Liveness probe
+  /ready:
+    get:
+      summary: Readiness probe (Postgres + Redis)
+  /.well-known/openid-configuration:
+    get:
+      summary: OIDC discovery document
+  /.well-known/jwks.json:
+    get:
+      summary: JSON Web Key Set
+  /oauth/token:
+    post:
+      summary: OAuth2 token endpoint
+  /oauth/userinfo:
+    get:
+      summary: OIDC userinfo
+  /oauth/introspect:
+    post:
+      summary: RFC 7662 token introspection
+  /oauth/authorize:
+    get:
+      summary: Authorization code flow (PKCE)
+  /oauth/login:
+    post:
+      summary: Browser login for authorization flow
+  /oauth/logout:
+    post:
+      summary: End browser session
+  /v1/auth/register:
+    post:
+      summary: Register user (bootstrap or admin)
+  /v1/clients:
+    post:
+      summary: Create OAuth client (admin)
+    get:
+      summary: List OAuth clients (admin)
+  /v1/authz/check:
+    post:
+      summary: RBAC authorization check
+  /v1/mfa/enroll:
+    post:
+      summary: Enroll TOTP MFA
+  /v1/api-keys:
+    post:
+      summary: Create API key
+  /v1/keys/rotate:
+    post:
+      summary: Rotate JWT signing keys

@@ -1,3 +1,5 @@
+pub mod extended;
+pub mod policy_loader;
 pub mod postgres;
 pub mod redis_store;
 

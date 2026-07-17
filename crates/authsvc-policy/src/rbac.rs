@@ -1,16 +1,24 @@
 use async_trait::async_trait;
-use authsvc_core::{AuthError, AuthzCheck, AuthzResult, PolicyEvaluator};
+use authsvc_core::{AuthError, AuthzCheck, AuthzResult, Permission, PolicyEvaluator};
+use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::stores::postgres::PostgresStore;
+#[async_trait]
+pub trait PermissionLoader: Send + Sync {
+    async fn list_user_permissions(
+        &self,
+        user_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Vec<Permission>, AuthError>;
+}
 
 pub struct RbacEvaluator {
-    store: PostgresStore,
+    loader: Arc<dyn PermissionLoader>,
 }
 
 impl RbacEvaluator {
-    pub fn new(store: PostgresStore) -> Self {
-        Self { store }
+    pub fn new(loader: Arc<dyn PermissionLoader>) -> Self {
+        Self { loader }
     }
 }
 
@@ -18,13 +26,15 @@ impl RbacEvaluator {
 impl PolicyEvaluator for RbacEvaluator {
     async fn check(&self, req: &AuthzCheck) -> Result<AuthzResult, AuthError> {
         let permissions = self
-            .store
+            .loader
             .list_user_permissions(req.subject_id, req.tenant_id)
             .await?;
 
         let allowed = permissions.iter().any(|p| {
             p.action == req.action
-                && (p.resource == req.resource || p.resource == "*" || req.resource.starts_with(&format!("{}/", p.resource)))
+                && (p.resource == req.resource
+                    || p.resource == "*"
+                    || req.resource.starts_with(&format!("{}/", p.resource)))
         });
 
         Ok(AuthzResult {
@@ -36,8 +46,4 @@ impl PolicyEvaluator for RbacEvaluator {
             },
         })
     }
-}
-
-pub fn subject_from_claims(sub: &str) -> Result<Uuid, AuthError> {
-    Uuid::parse_str(sub).map_err(|_| AuthError::InvalidToken)
 }

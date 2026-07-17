@@ -48,3 +48,15 @@ mod hex {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_roundtrip() {
+        let hash = hash_password("securepass123").unwrap();
+        assert!(verify_password("securepass123", &hash).unwrap());
+        assert!(!verify_password("wrong", &hash).unwrap());
+    }
+}
