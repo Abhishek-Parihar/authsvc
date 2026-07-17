@@ -100,6 +100,17 @@ impl Config {
             }
         }
 
+        fn empty_as_none(value: Option<String>) -> Option<String> {
+            value.filter(|s| !s.trim().is_empty())
+        }
+        cfg.jwt_private_key_pem = empty_as_none(cfg.jwt_private_key_pem);
+        cfg.jwt_public_key_pem = empty_as_none(cfg.jwt_public_key_pem);
+        cfg.bootstrap_secret = empty_as_none(cfg.bootstrap_secret);
+        cfg.mfa_encryption_key = empty_as_none(cfg.mfa_encryption_key);
+        cfg.openfga_url = empty_as_none(cfg.openfga_url);
+        cfg.otel_endpoint = empty_as_none(cfg.otel_endpoint);
+        cfg.webauthn_rp_id = empty_as_none(cfg.webauthn_rp_id);
+
         if cfg.env == "production" {
             if cfg.jwt_private_key_pem.is_none() || cfg.jwt_public_key_pem.is_none() {
                 anyhow::bail!("JWT_PRIVATE_KEY_PEM and JWT_PUBLIC_KEY_PEM required in production");

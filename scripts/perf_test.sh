@@ -76,18 +76,23 @@ run_load() {
   echo "=== $name ==="
 
   if command -v hey >/dev/null 2>&1; then
-    local hey_auth=()
-    if [[ -n "$auth_header" ]]; then
-      hey_auth=(-H "Authorization: $auth_header")
-    fi
     if [[ "$method" == "POST" && -n "$body" ]]; then
-      hey -z "$DURATION" -c "$CONCURRENCY" -m POST \
-        -H 'Content-Type: application/json' \
-        "${hey_auth[@]}" \
-        -d "$body" \
-        "$url"
+      if [[ -n "$auth_header" ]]; then
+        hey -z "$DURATION" -c "$CONCURRENCY" -m POST \
+          -H 'Content-Type: application/json' \
+          -H "Authorization: $auth_header" \
+          -d "$body" \
+          "$url"
+      else
+        hey -z "$DURATION" -c "$CONCURRENCY" -m POST \
+          -H 'Content-Type: application/json' \
+          -d "$body" \
+          "$url"
+      fi
+    elif [[ -n "$auth_header" ]]; then
+      hey -z "$DURATION" -c "$CONCURRENCY" -H "Authorization: $auth_header" "$url"
     else
-      hey -z "$DURATION" -c "$CONCURRENCY" "${hey_auth[@]}" "$url"
+      hey -z "$DURATION" -c "$CONCURRENCY" "$url"
     fi
   else
     echo "(hey not installed — using curl loop fallback)"

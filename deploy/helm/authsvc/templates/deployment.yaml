@@ -31,32 +31,48 @@ spec:
                 secretKeyRef:
                   name: {{ include "authsvc.fullname" . }}
                   key: redis-url
+            {{- if .Values.secrets.jwtPrivateKeyPem }}
             - name: JWT_PRIVATE_KEY_PEM
               valueFrom:
                 secretKeyRef:
                   name: {{ include "authsvc.fullname" . }}
                   key: jwt-private-key-pem
+            {{- end }}
+            {{- if .Values.secrets.jwtPublicKeyPem }}
             - name: JWT_PUBLIC_KEY_PEM
               valueFrom:
                 secretKeyRef:
                   name: {{ include "authsvc.fullname" . }}
                   key: jwt-public-key-pem
+            {{- end }}
+            {{- if .Values.secrets.bootstrapSecret }}
             - name: BOOTSTRAP_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ include "authsvc.fullname" . }}
                   key: bootstrap-secret
+            {{- end }}
+            {{- if .Values.secrets.mfaEncryptionKey }}
             - name: MFA_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "authsvc.fullname" . }}
                   key: mfa-encryption-key
+            {{- end }}
             - name: ENV
               value: {{ .Values.env.ENV | quote }}
-            - name: AUTHSVC_ISSUER
-              value: {{ .Values.env.AUTHSVC_ISSUER | quote }}
+            - name: ISSUER
+              value: {{ .Values.env.ISSUER | default .Values.env.AUTHSVC_ISSUER | quote }}
             - name: POLICY_BACKEND
               value: {{ .Values.env.POLICY_BACKEND | quote }}
+            {{- if .Values.env.RATE_LIMIT_PER_MINUTE }}
+            - name: RATE_LIMIT_PER_MINUTE
+              value: {{ .Values.env.RATE_LIMIT_PER_MINUTE | quote }}
+            {{- end }}
+            - name: PORT
+              value: {{ .Values.env.PORT | default .Values.env.AUTHSVC_PORT | default "8080" | quote }}
+            - name: HOST
+              value: "0.0.0.0"
           livenessProbe:
             httpGet:
               path: {{ .Values.livenessProbe.path }}

@@ -1,0 +1,16 @@
+# Lightweight single-node cluster for local perf testing.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: authsvc
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 18080
+        protocol: TCP
