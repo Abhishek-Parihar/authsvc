@@ -8,7 +8,7 @@ pub async fn health() -> impl axum::response::IntoResponse {
 }
 
 pub async fn ready(State(state): State<SharedState>) -> AppResult<impl axum::response::IntoResponse> {
-    state.store.ping().await?;
+    state.repos.health().ping().await?;
     let mut conn = state
         .sessions
         .pool()

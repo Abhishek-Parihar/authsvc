@@ -1,4 +1,4 @@
-use authsvc_core::{AuthError, ClientRepository, UserRepository};
+use authsvc_core::AuthError;
 use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
@@ -52,11 +52,14 @@ impl WebAuthnService {
         user_id: Uuid,
         name: Option<String>,
     ) -> Result<(Uuid, CreationChallengeResponse), AuthError> {
-        let user = UserRepository::find_by_id(&state.store, user_id)
+        let user = state
+            .repos
+            .users()
+            .find_by_id(user_id)
             .await?
             .ok_or(AuthError::UserNotFound)?;
 
-        let existing = state.store.list_webauthn_credentials(user_id).await?;
+        let existing = state.repos.webauthn().list_credentials(user_id).await?;
         let exclude: Vec<CredentialID> = existing
             .iter()
             .map(|c| CredentialID::from(c.credential_id.clone()))
@@ -108,8 +111,14 @@ impl WebAuthnService {
             serde_json::to_vec(&passkey).map_err(|e| AuthError::Internal(e.to_string()))?;
 
         let id = state
-            .store
-            .store_webauthn_credential(stored.user_id, &cred_id, &public_key, stored.name.as_deref())
+            .repos
+            .webauthn()
+            .store_credential(
+                stored.user_id,
+                &cred_id,
+                &public_key,
+                stored.name.as_deref(),
+            )
             .await?;
 
         state
@@ -132,15 +141,21 @@ impl WebAuthnService {
         email: &str,
         client_id: &str,
     ) -> Result<(Uuid, RequestChallengeResponse), AuthError> {
-        ClientRepository::find_by_client_id(&state.store, client_id)
+        state
+            .repos
+            .clients()
+            .find_by_client_id(client_id)
             .await?
             .ok_or(AuthError::ClientNotFound)?;
 
-        let user = UserRepository::find_by_email(&state.store, &email.to_lowercase())
+        let user = state
+            .repos
+            .users()
+            .find_by_email(&email.to_lowercase())
             .await?
             .ok_or(AuthError::UserNotFound)?;
 
-        let creds = state.store.list_webauthn_credentials(user.id).await?;
+        let creds = state.repos.webauthn().list_credentials(user.id).await?;
         if creds.is_empty() {
             return Err(AuthError::Validation("no passkeys registered".into()));
         }
@@ -196,8 +211,9 @@ impl WebAuthnService {
             .map_err(|_e| AuthError::InvalidCredentials)?;
 
         let creds = state
-            .store
-            .list_webauthn_credentials(stored.user_id)
+            .repos
+            .webauthn()
+            .list_credentials(stored.user_id)
             .await?;
         if let Some(record) = creds.iter().find(|c| {
             c.credential_id
@@ -205,15 +221,22 @@ impl WebAuthnService {
                 .eq(auth_result.cred_id().as_ref())
         }) {
             state
-                .store
-                .update_webauthn_sign_count(record.id, auth_result.counter() as i64)
+                .repos
+                .webauthn()
+                .update_sign_count(record.id, auth_result.counter() as i64)
                 .await?;
         }
 
-        let user = UserRepository::find_by_id(&state.store, stored.user_id)
+        let user = state
+            .repos
+            .users()
+            .find_by_id(stored.user_id)
             .await?
             .ok_or(AuthError::UserNotFound)?;
-        let client = ClientRepository::find_by_client_id(&state.store, &stored.client_id)
+        let client = state
+            .repos
+            .clients()
+            .find_by_client_id(&stored.client_id)
             .await?
             .ok_or(AuthError::ClientNotFound)?;
 

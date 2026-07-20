@@ -1,4 +1,4 @@
-replicaCount: 1
+replicaCount: 3
 
 image:
   repository: authsvc
@@ -27,6 +27,23 @@ env:
   REFRESH_TOKEN_TTL_SECS: "604800"
   SESSION_TTL_SECS: "86400"
   POLICY_BACKEND: rbac
+  DATABASE_MAX_CONNECTIONS: "25"
+  DISABLE_PASSWORD_GRANT: "true"
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+migration:
+  enabled: true
+  image: migrate/migrate
+  tag: v4.17.1
 
 secrets:
   databaseUrl: "postgres://authsvc:authsvc@postgres:5432/authsvc"
@@ -35,6 +52,7 @@ secrets:
   jwtPublicKeyPem: ""
   bootstrapSecret: ""
   mfaEncryptionKey: ""
+  dataEncryptionKey: ""
 
 resources:
   limits:

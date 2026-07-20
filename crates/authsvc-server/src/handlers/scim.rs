@@ -1,0 +1,83 @@
+use axum::{
+    extract::{Path, State},
+    http::{header::AUTHORIZATION, StatusCode},
+    response::IntoResponse,
+    Json,
+};
+use serde::Deserialize;
+use serde_json::json;
+use uuid::Uuid;
+
+use crate::{
+    handlers::{ApiError, AppResult, SharedState},
+    services::scim::{self, authenticate_scim},
+};
+
+async fn scim_account(state: &SharedState, headers: &axum::http::HeaderMap) -> Result<Uuid, ApiError> {
+    let hdr = headers
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or(ApiError(authsvc_core::AuthError::Forbidden))?;
+    let token = hdr
+        .strip_prefix("Bearer ")
+        .ok_or(ApiError(authsvc_core::AuthError::Forbidden))?;
+    Ok(authenticate_scim(state, token).await?)
+}
+
+pub async fn list_users(
+    State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    let account_id = scim_account(&state, &headers).await?;
+    Ok(Json(scim::list_users(&state, account_id).await?))
+}
+
+pub async fn get_user(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    let account_id = scim_account(&state, &headers).await?;
+    Ok(Json(scim::get_user(&state, account_id, id).await?))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ScimCreateUser {
+    pub userName: String,
+    #[serde(default)]
+    pub displayName: Option<String>,
+}
+
+pub async fn create_user(
+    State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<ScimCreateUser>,
+) -> AppResult<impl IntoResponse> {
+    let account_id = scim_account(&state, &headers).await?;
+    let user = scim::create_user(
+        &state,
+        account_id,
+        &body.userName,
+        body.displayName.as_deref(),
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(user)))
+}
+
+pub async fn delete_user(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    let account_id = scim_account(&state, &headers).await?;
+    scim::delete_user(&state, account_id, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn list_groups(
+    State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    let account_id = scim_account(&state, &headers).await?;
+    Ok(Json(scim::list_groups(&state, account_id).await?))
+}

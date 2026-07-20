@@ -19,26 +19,34 @@ use crate::{
     handlers::{
         admin::{
             add_role_inheritance, assign_user_role, create_api_key_handler, create_casbin_rule,
-            create_permission, create_role, create_account, create_website, create_webhook, delete_casbin_rule,
-            delete_client, get_account, list_casbin_rules, list_clients, remove_role_inheritance,
-            revoke_api_key_handler, rotate_keys as admin_rotate_keys,
+            create_permission, create_role, create_account, create_website, create_webhook,
+            create_scim_token_handler, delete_casbin_rule, delete_client, get_account,
+            list_casbin_rules, list_clients, remove_role_inheritance, revoke_api_key_handler,
+            rotate_keys as admin_rotate_keys,
         },
         auth::{
             complete_mfa, create_client, email_otp_send, email_otp_verify, magic_link_send,
             magic_link_verify, mfa_disable, mfa_enroll, mfa_verify, phone_otp_send,
             phone_otp_verify, register, revoke, select_account, token,
         },
+        compliance::compliance_status,
         federation::{federate_callback, federate_start},
         health::{health, metrics, ready},
+        idp_config::{delete_idp_config, list_idp_configs, upsert_idp_config},
         oidc::{
             authorize, check, introspect, logout, oauth_login, openid_configuration, userinfo, jwks,
         },
         portal::get_portal_from_map,
+        privacy::{delete_user, export_user},
+        saml::{saml_acs, saml_login, saml_metadata},
+        scim::{create_user as scim_create_user, delete_user as scim_delete_user, get_user as scim_get_user, list_groups as scim_list_groups, list_users as scim_list_users},
+        sessions::{list_sessions, revoke_all_sessions, revoke_session},
         webauthn::{login_begin, login_finish, register_begin, register_finish},
         SharedState,
     },
-    middleware::{require_admin, require_bootstrap_or_open},
+    middleware::{require_admin, require_bootstrap_or_open, security_headers, set_account_context},
     services::{
+        archival::spawn_archival_loop,
         state::AppState,
         webauthn::{rp_id_from_issuer, WebAuthnService},
     },
@@ -47,43 +55,50 @@ use crate::{
 
 pub async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
     let pool = PgPoolOptions::new()
-        .max_connections(10)
+        .max_connections(config.database_max_connections)
         .connect(&config.database_url)
         .await?;
 
-    let store = PostgresStore::new(pool);
+    let store = if let Some(read_url) = &config.database_read_url {
+        let read_pool = PgPoolOptions::new()
+            .max_connections(config.database_max_connections)
+            .connect(read_url)
+            .await?;
+        PostgresStore::with_read_pool(pool, read_pool)
+    } else {
+        PostgresStore::new(pool)
+    };
     let sessions = RedisSessionStore::new(&config.redis_url)?;
 
     let mut idp_registry = ProviderRegistry::new();
-    if let (Ok(g_id), Ok(g_sec)) = (
-        std::env::var("GOOGLE_CLIENT_ID"),
-        std::env::var("GOOGLE_CLIENT_SECRET"),
+    if let (Some(g_id), Some(g_sec)) = (
+        config.google_client_id.clone(),
+        config.google_client_secret.clone(),
     ) {
         let redirect = format!("{}/oauth/federate/google/callback", config.issuer);
         if let Ok(p) = GoogleProvider::new(&g_id, &g_sec, &redirect) {
             idp_registry.register(Arc::new(p));
         }
     }
-    if let (Ok(gh_id), Ok(gh_sec)) = (
-        std::env::var("GITHUB_CLIENT_ID"),
-        std::env::var("GITHUB_CLIENT_SECRET"),
+    if let (Some(gh_id), Some(gh_sec)) = (
+        config.github_client_id.clone(),
+        config.github_client_secret.clone(),
     ) {
         let redirect = format!("{}/oauth/federate/github/callback", config.issuer);
         if let Ok(p) = GitHubProvider::new(&gh_id, &gh_sec, &redirect) {
             idp_registry.register(Arc::new(p));
         }
     }
-    if let (Ok(ms_id), Ok(ms_sec)) = (
-        std::env::var("MICROSOFT_CLIENT_ID"),
-        std::env::var("MICROSOFT_CLIENT_SECRET"),
+    if let (Some(ms_id), Some(ms_sec)) = (
+        config.microsoft_client_id.clone(),
+        config.microsoft_client_secret.clone(),
     ) {
         let redirect = format!("{}/oauth/federate/microsoft/callback", config.issuer);
-        let tenant = std::env::var("MICROSOFT_TENANT").ok();
         if let Ok(p) = MicrosoftProvider::new(
             &ms_id,
             &ms_sec,
             &redirect,
-            tenant.as_deref(),
+            config.microsoft_tenant.as_deref(),
         ) {
             idp_registry.register(Arc::new(p));
         }
@@ -100,6 +115,12 @@ pub async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
     Ok(Arc::new(
         AppState::new(config, store, sessions, idp_registry, webauthn).await?,
     ))
+}
+
+pub async fn build_state_and_spawn_jobs(config: Config) -> anyhow::Result<Arc<AppState>> {
+    let state = build_state(config).await?;
+    spawn_archival_loop(state.as_ref().clone());
+    Ok(state)
 }
 
 pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometheus::PrometheusHandle) -> Router {
@@ -149,6 +170,16 @@ pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometh
         .route("/v1/authz/check", post(check))
         .route("/oauth/federate/{provider}", get(federate_start))
         .route("/oauth/federate/{provider}/callback", get(federate_callback))
+        .route("/saml/metadata", get(saml_metadata))
+        .route("/saml/login", get(saml_login))
+        .route("/saml/acs", post(saml_acs))
+        .route("/v1/compliance/status", get(compliance_status))
+        .route("/scim/v2/Users", get(scim_list_users).post(scim_create_user))
+        .route(
+            "/scim/v2/Users/{id}",
+            get(scim_get_user).delete(scim_delete_user),
+        )
+        .route("/scim/v2/Groups", get(scim_list_groups))
         .route("/v1/webauthn/login/begin", post(login_begin))
         .route("/v1/webauthn/login/finish", post(login_finish));
 
@@ -178,6 +209,14 @@ pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometh
         .route("/v1/casbin/rules/{id}", axum::routing::delete(delete_casbin_rule))
         .route("/v1/casbin/rules/account/{account_id}", get(list_casbin_rules))
         .route("/v1/webhooks", post(create_webhook))
+        .route("/v1/idp-configs", get(list_idp_configs))
+        .route("/v1/idp-configs/{provider}", post(upsert_idp_config).delete(delete_idp_config))
+        .route("/v1/scim-tokens", post(create_scim_token_handler))
+        .route("/v1/users/{id}/export", get(export_user))
+        .route("/v1/users/{id}/privacy", axum::routing::delete(delete_user))
+        .route("/v1/users/{id}/sessions", get(list_sessions))
+        .route("/v1/users/{id}/sessions/revoke-all", post(revoke_all_sessions))
+        .route("/v1/sessions/{id}", axum::routing::delete(revoke_session))
         .route("/v1/keys/rotate", post(admin_rotate_keys))
         .route("/v1/mfa/enroll", post(mfa_enroll))
         .route("/v1/mfa/verify", post(mfa_verify))
@@ -189,6 +228,8 @@ pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometh
     public
         .merge(bootstrap)
         .merge(admin)
+        .layer(axum_mw::from_fn_with_state(state.clone(), set_account_context))
+        .layer(axum_mw::from_fn_with_state(state.clone(), security_headers))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state)

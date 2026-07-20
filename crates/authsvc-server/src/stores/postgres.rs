@@ -17,15 +17,30 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct PostgresStore {
     pool: PgPool,
+    read_pool: Option<PgPool>,
 }
 
 impl PostgresStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            read_pool: None,
+        }
+    }
+
+    pub fn with_read_pool(pool: PgPool, read_pool: PgPool) -> Self {
+        Self {
+            pool,
+            read_pool: Some(read_pool),
+        }
     }
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    fn read_pool(&self) -> &PgPool {
+        self.read_pool.as_ref().unwrap_or(&self.pool)
     }
 
     pub async fn migrate(&self) -> Result<(), AuthError> {
@@ -412,10 +427,10 @@ impl UserRepository for PostgresStore {
         let row = sqlx::query(
             "SELECT id, email, password_hash, display_name, email_verified,
                     mfa_enabled, status, locked_until, created_at, updated_at
-             FROM users WHERE LOWER(email) = LOWER($1)",
+             FROM users WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL",
         )
         .bind(email)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.read_pool())
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
 
@@ -434,6 +449,14 @@ impl UserRepository for PostgresStore {
         .map_err(|e| AuthError::Internal(e.to_string()))?;
 
         Ok(row.map(map_user))
+    }
+
+    async fn set_locked_until(&self, user_id: Uuid, until: DateTime<Utc>) -> Result<(), AuthError> {
+        PostgresStore::set_locked_until(self, user_id, until).await
+    }
+
+    async fn count_users(&self) -> Result<i64, AuthError> {
+        PostgresStore::count_users(self).await
     }
 }
 
@@ -525,6 +548,15 @@ impl ClientRepository for PostgresStore {
                 created_at: r.get("created_at"),
             }
         }))
+    }
+
+    async fn find_client_id_by_uuid(&self, id: Uuid) -> Result<Option<String>, AuthError> {
+        let row = sqlx::query_scalar("SELECT client_id FROM oauth_clients WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(row)
     }
 }
 

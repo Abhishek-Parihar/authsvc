@@ -8,10 +8,16 @@ use serde_json::json;
 
 pub mod admin;
 pub mod auth;
+pub mod compliance;
 pub mod federation;
 pub mod health;
+pub mod idp_config;
 pub mod oidc;
 pub mod portal;
+pub mod privacy;
+pub mod saml;
+pub mod scim;
+pub mod sessions;
 pub mod webauthn;
 
 pub struct ApiError(pub AuthError);

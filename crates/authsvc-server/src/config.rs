@@ -36,15 +36,32 @@ pub struct Config {
     #[serde(default = "default_rate_limit")]
     pub rate_limit_per_minute: u32,
     pub mfa_encryption_key: Option<String>,
+    pub data_encryption_key: Option<String>,
+    pub kms_http_url: Option<String>,
+    #[serde(default)]
+    pub disable_password_grant: bool,
+    #[serde(default = "default_database_max_connections")]
+    pub database_max_connections: u32,
+    pub database_read_url: Option<String>,
+    #[serde(default = "default_deployment_mode")]
+    pub deployment_mode: String,
+    pub audit_export_webhook: Option<String>,
+    #[serde(default)]
+    pub cookie_secure: bool,
     #[serde(default = "default_policy_backend")]
     pub policy_backend: String,
     pub openfga_url: Option<String>,
     pub otel_endpoint: Option<String>,
     pub webauthn_rp_id: Option<String>,
-    #[serde(default)]
-    pub cookie_secure: bool,
     #[serde(default = "default_jwt_key_grace_secs")]
     pub jwt_key_grace_secs: u64,
+    pub google_client_id: Option<String>,
+    pub google_client_secret: Option<String>,
+    pub github_client_id: Option<String>,
+    pub github_client_secret: Option<String>,
+    pub microsoft_client_id: Option<String>,
+    pub microsoft_client_secret: Option<String>,
+    pub microsoft_tenant: Option<String>,
 }
 
 fn default_host() -> String {
@@ -92,6 +109,12 @@ fn default_policy_backend() -> String {
 fn default_jwt_key_grace_secs() -> u64 {
     86400
 }
+fn default_database_max_connections() -> u32 {
+    10
+}
+fn default_deployment_mode() -> String {
+    "self_hosted".into()
+}
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
@@ -115,14 +138,32 @@ impl Config {
         cfg.jwt_public_key_pem = empty_as_none(cfg.jwt_public_key_pem);
         cfg.bootstrap_secret = empty_as_none(cfg.bootstrap_secret);
         cfg.mfa_encryption_key = empty_as_none(cfg.mfa_encryption_key);
+        cfg.data_encryption_key = empty_as_none(cfg.data_encryption_key);
+        cfg.kms_http_url = empty_as_none(cfg.kms_http_url);
+        cfg.database_read_url = empty_as_none(cfg.database_read_url);
+        cfg.audit_export_webhook = empty_as_none(cfg.audit_export_webhook);
         cfg.openfga_url = empty_as_none(cfg.openfga_url);
         cfg.otel_endpoint = empty_as_none(cfg.otel_endpoint);
         cfg.webauthn_rp_id = empty_as_none(cfg.webauthn_rp_id);
+        cfg.google_client_id = empty_as_none(cfg.google_client_id);
+        cfg.google_client_secret = empty_as_none(cfg.google_client_secret);
+        cfg.github_client_id = empty_as_none(cfg.github_client_id);
+        cfg.github_client_secret = empty_as_none(cfg.github_client_secret);
+        cfg.microsoft_client_id = empty_as_none(cfg.microsoft_client_id);
+        cfg.microsoft_client_secret = empty_as_none(cfg.microsoft_client_secret);
+        cfg.microsoft_tenant = empty_as_none(cfg.microsoft_tenant);
 
-        if cfg.env == "production"
-            && (cfg.jwt_private_key_pem.is_none() || cfg.jwt_public_key_pem.is_none())
-        {
-            anyhow::bail!("JWT_PRIVATE_KEY_PEM and JWT_PUBLIC_KEY_PEM required in production");
+        if cfg.env == "production" {
+            if cfg.jwt_private_key_pem.is_none() || cfg.jwt_public_key_pem.is_none() {
+                anyhow::bail!("JWT_PRIVATE_KEY_PEM and JWT_PUBLIC_KEY_PEM required in production");
+            }
+            if cfg.data_encryption_key.is_none() && cfg.mfa_encryption_key.is_none() {
+                anyhow::bail!("DATA_ENCRYPTION_KEY or MFA_ENCRYPTION_KEY required in production");
+            }
+            if !cfg.cookie_secure {
+                cfg.cookie_secure = true;
+            }
+            cfg.disable_password_grant = true;
         }
 
         Ok(cfg)
@@ -130,5 +171,9 @@ impl Config {
 
     pub fn is_production(&self) -> bool {
         self.env == "production"
+    }
+
+    pub fn is_managed_saas(&self) -> bool {
+        self.deployment_mode == "managed_saas"
     }
 }

@@ -4,7 +4,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use authsvc_core::{AccountRepository, AuthError};
+use authsvc_core::AuthError;
 use base64::Engine;
 use serde::Deserialize;
 use serde_json::json;
@@ -46,15 +46,13 @@ pub async fn register(
         .rate_limiter
         .check(&format!("register:{}", body.email))
         .await?;
-    let user = register_user(&state, &body.email, &body.password, body.display_name).await?;
-    let account = AccountRepository::find_by_slug(&state.store, &state.config.default_account_slug)
-        .await?
-        .ok_or_else(|| ApiError(AuthError::NotFound("account".into())))?;
+    let (user, account_id) =
+        register_user(&state, &body.email, &body.password, body.display_name).await?;
     Ok(Json(json!({
         "id": user.id,
         "email": user.email,
         "status": user.status,
-        "account_id": account.id
+        "account_id": account_id
     })))
 }
 
@@ -123,6 +121,11 @@ pub async fn token(
 
     match req.grant_type.as_str() {
         "password" => {
+            if state.config.disable_password_grant {
+                return Err(ApiError(AuthError::Validation(
+                    "password grant disabled".into(),
+                )));
+            }
             let client_id = req.client_id.ok_or_else(|| {
                 ApiError(AuthError::Validation("client_id required".into()))
             })?;

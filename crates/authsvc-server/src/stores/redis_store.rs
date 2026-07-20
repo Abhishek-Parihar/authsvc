@@ -79,6 +79,27 @@ impl RedisSessionStore {
 }
 
 #[async_trait]
+impl authsvc_core::CacheStore for RedisSessionStore {
+    async fn set_json<T>(&self, key: &str, value: &T, ttl_secs: u64) -> Result<(), AuthError>
+    where
+        T: serde::Serialize + Send + Sync,
+    {
+        self.set_json(key, value, ttl_secs).await
+    }
+
+    async fn get_json<T>(&self, key: &str) -> Result<Option<T>, AuthError>
+    where
+        T: serde::de::DeserializeOwned + Send,
+    {
+        self.get_json(key).await
+    }
+
+    async fn delete_key(&self, key: &str) -> Result<(), AuthError> {
+        self.delete_key(key).await
+    }
+}
+
+#[async_trait]
 impl SessionStore for RedisSessionStore {
     async fn create(&self, session_id: Uuid, user_id: Uuid, ttl_secs: u64) -> Result<(), AuthError> {
         let mut conn = self

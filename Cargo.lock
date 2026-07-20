@@ -234,6 +234,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "authsvc-core",
+ "base64 0.22.1",
  "oauth2",
  "openidconnect",
  "reqwest 0.12.28",

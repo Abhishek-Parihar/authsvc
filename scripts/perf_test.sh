@@ -62,6 +62,9 @@ TOKEN_JSON=$(curl -sf -X POST "$BASE_URL/oauth/token" \
   -d "{\"grant_type\":\"password\",\"client_id\":\"$CLIENT_ID\",\"client_secret\":\"$CLIENT_SECRET\",\"username\":\"$EMAIL\",\"password\":\"perf-password-123\"}")
 
 ACCESS_TOKEN=$(echo "$TOKEN_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+REFRESH_TOKEN=$(echo "$TOKEN_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("refresh_token",""))')
+USER_ID=$(echo "$ACCESS_TOKEN" | python3 -c 'import sys,base64,json; p=sys.stdin.read().strip().split(".")[1]; p+="="*((4-len(p)%4)%4); print(json.loads(base64.urlsafe_b64decode(p))["sub"])')
+ACCOUNT_ID=$(echo "$ACCESS_TOKEN" | python3 -c 'import sys,base64,json; p=sys.stdin.read().strip().split(".")[1]; p+="="*((4-len(p)%4)%4); print(json.loads(base64.urlsafe_b64decode(p))["account_id"])')
 
 run_load() {
   local name="$1"
@@ -127,7 +130,17 @@ run_load "Health (liveness)" "$BASE_URL/health"
 run_load "JWKS" "$BASE_URL/.well-known/jwks.json"
 run_load "Token (password grant)" "$BASE_URL/oauth/token" POST \
   "{\"grant_type\":\"password\",\"client_id\":\"$CLIENT_ID\",\"client_secret\":\"$CLIENT_SECRET\",\"username\":\"$EMAIL\",\"password\":\"perf-password-123\"}"
+run_load "Token (refresh grant)" "$BASE_URL/oauth/token" POST \
+  "{\"grant_type\":\"refresh_token\",\"client_id\":\"$CLIENT_ID\",\"client_secret\":\"$CLIENT_SECRET\",\"refresh_token\":\"$REFRESH_TOKEN\"}"
+run_load "Authz check" "$BASE_URL/v1/authz/check" POST \
+  "{\"subject\":\"user:$USER_ID\",\"resource\":\"users\",\"action\":\"read\",\"account_id\":\"$ACCOUNT_ID\"}"
 run_load "Userinfo (authenticated)" "$BASE_URL/oauth/userinfo" GET "" "Bearer $ACCESS_TOKEN"
+
+echo ""
+echo "=== Baseline targets (single node, dev hardware) ==="
+echo "  login RPS:        > 100"
+echo "  refresh RPS:      > 200"
+echo "  authz check RPS:  > 500"
 
 echo ""
 echo "=== Prometheus metrics snapshot ==="

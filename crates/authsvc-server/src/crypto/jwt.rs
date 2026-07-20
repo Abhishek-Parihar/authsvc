@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use authsvc_core::{AuthError, User};
+use authsvc_core::{AuthError, SigningKeyStore, User};
 use jsonwebtoken::{
     decode, decode_header, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation,
 };
@@ -9,8 +9,6 @@ use rsa::pkcs8::{DecodePublicKey, EncodePrivateKey, EncodePublicKey};
 use rsa::RsaPrivateKey;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-use crate::stores::PostgresStore;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessTokenClaims {
@@ -64,7 +62,7 @@ pub struct JwtKeyStore {
 
 impl JwtKeyStore {
     pub async fn load_from_db(
-        store: &PostgresStore,
+        store: &dyn SigningKeyStore,
         issuer: &str,
         access_ttl_secs: u64,
         grace_secs: u64,
@@ -81,7 +79,7 @@ impl JwtKeyStore {
         })
     }
 
-    pub async fn reload(&self, store: &PostgresStore) -> Result<(), AuthError> {
+    pub async fn reload(&self, store: &dyn SigningKeyStore) -> Result<(), AuthError> {
         let key_set = build_key_set(store, self.grace_secs).await?;
         *self
             .inner
@@ -227,7 +225,7 @@ impl JwtKeyStore {
 pub type SharedJwtKeyStore = Arc<JwtKeyStore>;
 
 async fn ensure_signing_key_in_db(
-    store: &PostgresStore,
+    store: &dyn SigningKeyStore,
     env_private_pem: Option<String>,
     env_public_pem: Option<String>,
 ) -> Result<(), AuthError> {
@@ -253,7 +251,7 @@ async fn ensure_signing_key_in_db(
         .await
 }
 
-async fn build_key_set(store: &PostgresStore, grace_secs: u64) -> Result<KeySet, AuthError> {
+async fn build_key_set(store: &dyn SigningKeyStore, grace_secs: u64) -> Result<KeySet, AuthError> {
     let active = store
         .get_active_signing_key()
         .await?

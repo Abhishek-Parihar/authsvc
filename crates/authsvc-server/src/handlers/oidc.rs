@@ -4,9 +4,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use authsvc_core::{
-    AuthError, AuthzCheck, AuthzResult, ClientRepository, SessionStore, UserRepository,
-};
+use authsvc_core::{AuthError, AuthzCheck, AuthzResult, SessionStore};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -14,7 +12,10 @@ use uuid::Uuid;
 use crate::{
     handlers::{auth::extract_bearer_user, ApiError, AppResult, SharedState},
     middleware::{authenticate, AuthContext},
-    services::authz::check_authorization,
+    services::{
+        authz::check_authorization,
+        oidc_flow::{self, AuthorizeParams},
+    },
 };
 
 pub async fn openid_configuration(
@@ -103,19 +104,8 @@ pub async fn userinfo(
     headers: HeaderMap,
 ) -> AppResult<Json<Value>> {
     let claims = extract_bearer_user(&state, &headers).await?;
-    let user_id = Uuid::parse_str(&claims.sub)
-        .map_err(|_| ApiError(AuthError::InvalidToken))?;
-    let user = UserRepository::find_by_id(&state.store, user_id)
-        .await?
-        .ok_or(ApiError(AuthError::UserNotFound))?;
-    Ok(Json(json!({
-        "sub": user.id,
-        "email": user.email,
-        "email_verified": user.email_verified,
-        "name": user.display_name,
-        "account_id": claims.account_id,
-        "website_id": claims.website_id
-    })))
+    let info = oidc_flow::userinfo(&state, &claims).await?;
+    Ok(Json(info))
 }
 
 #[derive(Debug, Deserialize)]
@@ -172,16 +162,6 @@ pub async fn authorize(
         )));
     }
 
-    let client = ClientRepository::find_by_client_id(&state.store, &q.client_id)
-        .await?
-        .ok_or(ApiError(AuthError::ClientNotFound))?;
-
-    if !client.redirect_uris.is_empty()
-        && !client.redirect_uris.contains(&q.redirect_uri)
-    {
-        return Err(ApiError(AuthError::Validation("invalid redirect_uri".into())));
-    }
-
     let scopes: Vec<String> = q
         .scope
         .unwrap_or_else(|| "openid profile".into())
@@ -189,18 +169,16 @@ pub async fn authorize(
         .map(str::to_string)
         .collect();
 
-    let login_state = Uuid::new_v4().to_string();
-    state
-        .store
-        .store_login_state(
-            &login_state,
-            &q.client_id,
-            &q.redirect_uri,
-            &q.code_challenge,
-            &scopes,
-            chrono::Utc::now() + chrono::Duration::minutes(10),
-        )
-        .await?;
+    let login_state = oidc_flow::start_authorization(
+        &state,
+        AuthorizeParams {
+            client_id: q.client_id,
+            redirect_uri: q.redirect_uri,
+            code_challenge: q.code_challenge,
+            scopes,
+        },
+    )
+    .await?;
 
     Ok(Json(json!({
         "login_required": true,
@@ -220,56 +198,45 @@ pub async fn oauth_login(
     State(state): State<SharedState>,
     Json(body): Json<OAuthLoginRequest>,
 ) -> AppResult<impl axum::response::IntoResponse> {
-    let login = state
-        .store
-        .get_login_state(&body.login_state)
-        .await?
-        .ok_or(ApiError(AuthError::InvalidToken))?;
-
-    let (client_id, redirect_uri, code_challenge, scopes) = login;
-    let user = UserRepository::find_by_email(&state.store, &body.email.to_lowercase())
-        .await?
-        .ok_or(ApiError(AuthError::InvalidCredentials))?;
-
-    let hash = user
-        .password_hash
-        .as_deref()
-        .ok_or(ApiError(AuthError::InvalidCredentials))?;
-    if !crate::crypto::password::verify_password(&body.password, hash)? {
-        return Err(ApiError(AuthError::InvalidCredentials));
-    }
-
-    let session_id =
-        crate::services::oidc_flow::store_browser_session(&state, user.id).await?;
-    let redirect = crate::services::oidc_flow::create_authorization_redirect(
+    let result = crate::services::oidc_flow::complete_browser_login(
         &state,
-        &client_id,
-        &redirect_uri,
-        &code_challenge,
-        &scopes,
-        user.id,
+        &body.login_state,
+        &body.email,
+        &body.password,
+        None,
     )
     .await?;
 
-    let mut response = Json(json!({
-        "redirect": redirect,
-        "session_id": session_id
-    }))
-    .into_response();
+    match result {
+        crate::services::oidc_flow::BrowserLoginResult::Success(success) => {
+            let session_id = success.session_id;
+            let mut response = Json(json!({
+                "redirect": success.redirect,
+                "session_id": session_id
+            }))
+            .into_response();
 
-    let cookie = format!(
-        "authsvc_session={session_id}; HttpOnly; Path=/; SameSite=Lax{}",
-        if state.config.cookie_secure {
-            "; Secure"
-        } else {
-            ""
+            let cookie = format!(
+                "authsvc_session={session_id}; HttpOnly; Path=/; SameSite=Lax{}",
+                if state.config.cookie_secure {
+                    "; Secure"
+                } else {
+                    ""
+                }
+            );
+            response.headers_mut().insert(
+                axum::http::header::SET_COOKIE,
+                cookie.parse().unwrap(),
+            );
+            Ok(response)
         }
-    );
-    response.headers_mut().insert(
-        axum::http::header::SET_COOKIE,
-        cookie.parse().unwrap(),
-    );
-    Ok(response)
+        crate::services::oidc_flow::BrowserLoginResult::MfaRequired(mfa) => {
+            Ok(Json(json!(mfa)).into_response())
+        }
+        crate::services::oidc_flow::BrowserLoginResult::AccountSelection(selection) => {
+            Ok(Json(json!(selection)).into_response())
+        }
+    }
 }
 
 pub async fn logout(

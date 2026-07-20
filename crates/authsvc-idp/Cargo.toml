@@ -8,6 +8,7 @@ authors.workspace = true
 [dependencies]
 async-trait.workspace = true
 authsvc-core = { path = "../authsvc-core" }
+base64.workspace = true
 oauth2.workspace = true
 openidconnect.workspace = true
 reqwest.workspace = true

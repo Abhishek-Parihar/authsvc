@@ -1,14 +1,24 @@
+pub mod admin;
 pub mod api_keys;
+pub mod archival;
 pub mod auth;
 pub mod authz;
+pub mod cache_layer;
+pub mod compliance;
 pub mod federation;
+pub mod idp_config;
 pub mod login_selection;
 pub mod mfa;
 pub mod notifications;
 pub mod oidc_flow;
 pub mod ops;
 pub mod otp;
+pub mod platform;
 pub mod portal;
+pub mod privacy;
+pub mod saas;
+pub mod scim;
+pub mod sessions;
 pub mod state;
 pub mod webauthn;
 

@@ -3,6 +3,7 @@ pub mod google;
 pub mod microsoft;
 pub mod oidc;
 pub mod registry;
+pub mod saml;
 
 use async_trait::async_trait;
 use authsvc_core::AuthError;

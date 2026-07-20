@@ -14,7 +14,8 @@ pub async fn create_api_key(
     let prefix: String = plain.chars().take(12).collect();
     let hash = hash_token(&plain);
     let id = state
-        .store
+        .repos
+        .api_keys()
         .create_api_key(account_id, name, &prefix, &hash, &scopes, None)
         .await?;
     Ok((id, plain))
@@ -23,7 +24,8 @@ pub async fn create_api_key(
 pub async fn validate_api_key(state: &AppState, key: &str) -> Result<(Uuid, Uuid, Vec<String>), AuthError> {
     let hash = hash_token(key);
     state
-        .store
+        .repos
+        .api_keys()
         .find_api_key(&hash)
         .await?
         .ok_or(AuthError::InvalidCredentials)
@@ -55,5 +57,5 @@ pub async fn api_key_grant(state: &AppState, api_key: &str) -> Result<super::aut
 }
 
 pub async fn revoke_api_key(state: &AppState, id: Uuid) -> Result<(), AuthError> {
-    state.store.revoke_api_key(id).await
+    state.repos.api_keys().revoke_api_key(id).await
 }

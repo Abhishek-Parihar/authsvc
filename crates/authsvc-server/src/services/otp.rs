@@ -1,14 +1,13 @@
-use authsvc_core::{
-    AccountRepository, AuthError, ClientRepository, MembershipRepository, UserRepository,
-};
-use chrono::{Duration, Utc};
+use authsvc_core::AuthError;
 use rand::Rng;
 
 use super::{
     auth::TokenResponse,
+    platform,
     state::AppState,
 };
 use crate::crypto::password::{generate_refresh_token, hash_password, hash_token};
+use chrono::{Duration, Utc};
 
 fn generate_otp_code() -> String {
     let mut rng = rand::thread_rng();
@@ -24,7 +23,8 @@ pub async fn send_email_otp(state: &AppState, email: &str) -> Result<String, Aut
     let code = generate_otp_code();
     let code_hash = hash_token(&code);
     state
-        .store
+        .repos
+        .otp()
         .store_email_otp(&email.to_lowercase(), &code_hash, Utc::now() + Duration::minutes(10))
         .await?;
 
@@ -48,36 +48,42 @@ pub async fn verify_email_otp(
 ) -> Result<TokenResponse, AuthError> {
     let email = email.to_lowercase();
     let code_hash = hash_token(code);
-    if !state.store.consume_email_otp(&email, &code_hash).await? {
+    if !state.repos.otp().consume_email_otp(&email, &code_hash).await? {
         return Err(AuthError::InvalidCredentials);
     }
 
-    let account = AccountRepository::find_by_slug(&state.store, &state.config.default_account_slug)
-        .await?
-        .ok_or_else(|| AuthError::NotFound("account".into()))?;
+    let account = platform::default_account(state).await?;
 
-    let user = match UserRepository::find_by_email(&state.store, &email).await? {
+    let user = match state.repos.users().find_by_email(&email).await? {
         Some(u) => u,
         None => {
             let pwd = generate_refresh_token();
             let hash = hash_password(&pwd)?;
-            let user = UserRepository::create(
-                &state.store,
-                &authsvc_core::user::CreateUser {
-                    email: email.clone(),
-                    password: pwd,
-                    display_name: None,
-                },
-                &hash,
-            )
-            .await?;
-            MembershipRepository::add_account_member(&state.store, account.id, user.id, None)
+            let user = state
+                .repos
+                .users()
+                .create(
+                    &authsvc_core::user::CreateUser {
+                        email: email.clone(),
+                        password: pwd,
+                        display_name: None,
+                    },
+                    &hash,
+                )
+                .await?;
+            state
+                .repos
+                .memberships()
+                .add_account_member(account.id, user.id, None)
                 .await?;
             user
         }
     };
 
-    let client = ClientRepository::find_by_client_id(&state.store, client_id)
+    let client = state
+        .repos
+        .clients()
+        .find_by_client_id(client_id)
         .await?
         .ok_or(AuthError::ClientNotFound)?;
 
@@ -94,7 +100,8 @@ pub async fn send_phone_otp(state: &AppState, phone: &str) -> Result<String, Aut
     let code = generate_otp_code();
     let code_hash = hash_token(&code);
     state
-        .store
+        .repos
+        .otp()
         .store_phone_otp(&phone, &code_hash, Utc::now() + Duration::minutes(10))
         .await?;
 
@@ -114,39 +121,48 @@ pub async fn verify_phone_otp(
 ) -> Result<TokenResponse, AuthError> {
     let phone = normalize_phone(phone);
     let code_hash = hash_token(code);
-    if !state.store.consume_phone_otp(&phone, &code_hash).await? {
+    if !state.repos.otp().consume_phone_otp(&phone, &code_hash).await? {
         return Err(AuthError::InvalidCredentials);
     }
 
-    let account = AccountRepository::find_by_slug(&state.store, &state.config.default_account_slug)
-        .await?
-        .ok_or_else(|| AuthError::NotFound("account".into()))?;
+    let account = platform::default_account(state).await?;
 
-    let user = if let Some(user_id) = state.store.find_user_id_by_phone(&phone).await? {
-        UserRepository::find_by_id(&state.store, user_id)
+    let user = if let Some(user_id) = state.repos.otp().find_user_id_by_phone(&phone).await? {
+        state
+            .repos
+            .users()
+            .find_by_id(user_id)
             .await?
             .ok_or(AuthError::UserNotFound)?
     } else {
         let email = format!("{phone}@phone.authsvc.local");
         let pwd = generate_refresh_token();
         let hash = hash_password(&pwd)?;
-        let user = UserRepository::create(
-            &state.store,
-            &authsvc_core::user::CreateUser {
-                email,
-                password: pwd,
-                display_name: None,
-            },
-            &hash,
-        )
-        .await?;
-        MembershipRepository::add_account_member(&state.store, account.id, user.id, None)
+        let user = state
+            .repos
+            .users()
+            .create(
+                &authsvc_core::user::CreateUser {
+                    email,
+                    password: pwd,
+                    display_name: None,
+                },
+                &hash,
+            )
             .await?;
-        state.store.link_verified_phone(user.id, &phone).await?;
+        state
+            .repos
+            .memberships()
+            .add_account_member(account.id, user.id, None)
+            .await?;
+        state.repos.otp().link_verified_phone(user.id, &phone).await?;
         user
     };
 
-    let client = ClientRepository::find_by_client_id(&state.store, client_id)
+    let client = state
+        .repos
+        .clients()
+        .find_by_client_id(client_id)
         .await?
         .ok_or(AuthError::ClientNotFound)?;
 

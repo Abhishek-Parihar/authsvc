@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use authsvc_core::{AccountRepository, AuthError, NotificationSender};
+use authsvc_core::{AuthError, DataKeyStore, NotificationSender};
 use authsvc_idp::ProviderRegistry;
 use authsvc_policy::{casbin::CasbinEvaluator, openfga::OpenFgaEvaluator, rbac, CompositeEvaluator, PolicyBackend};
 use authsvc_policy::rbac::RbacEvaluator;
@@ -10,20 +10,24 @@ use uuid::Uuid;
 
 use crate::{
     config::Config,
-    crypto::jwt::{JwtKeyStore, SharedJwtKeyStore},
+    crypto::{
+        data_keys::build_data_key_store,
+        jwt::{JwtKeyStore, SharedJwtKeyStore},
+    },
     middleware::RateLimiter,
     services::{
         notifications::build_notifier,
         webauthn::WebAuthnService,
     },
-    stores::{PostgresStore, RedisSessionStore},
+    stores::{PostgresStore, RedisSessionStore, Repositories},
 };
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
-    pub store: PostgresStore,
+    pub repos: Repositories,
     pub sessions: RedisSessionStore,
+    pub data_keys: Arc<dyn DataKeyStore>,
     pub jwt: SharedJwtKeyStore,
     pub rate_limiter: RateLimiter,
     pub policy: Arc<CompositeEvaluator>,
@@ -40,11 +44,19 @@ impl AppState {
         idp_registry: ProviderRegistry,
         webauthn: Option<Arc<WebAuthnService>>,
     ) -> Result<Self, AuthError> {
-        store.migrate().await?;
-        AccountRepository::ensure_default(&store).await?;
+        let repos = Repositories::new(store);
+        repos.postgres().migrate().await?;
+        repos.accounts().ensure_default().await?;
+
+        let data_keys = build_data_key_store(
+            config.data_encryption_key.as_deref(),
+            config.mfa_encryption_key.as_deref(),
+            config.kms_http_url.as_deref(),
+            config.is_production(),
+        )?;
 
         let jwt = JwtKeyStore::load_from_db(
-            &store,
+            repos.signing_keys(),
             &config.issuer,
             config.access_token_ttl_secs,
             config.jwt_key_grace_secs,
@@ -58,8 +70,11 @@ impl AppState {
             config.rate_limit_per_minute,
         );
 
-        let rbac = RbacEvaluator::new(Arc::new(store.clone()) as Arc<dyn rbac::PermissionLoader>);
-        let casbin = CasbinEvaluator::new(Arc::new(store.clone()) as Arc<dyn authsvc_policy::casbin::CasbinPolicyLoader>);
+        let postgres = repos.postgres().clone();
+        let rbac = RbacEvaluator::new(Arc::new(postgres.clone()) as Arc<dyn rbac::PermissionLoader>);
+        let casbin = CasbinEvaluator::new(
+            Arc::new(postgres.clone()) as Arc<dyn authsvc_policy::casbin::CasbinPolicyLoader>,
+        );
         let openfga = OpenFgaEvaluator::new(
             config.openfga_url.clone().unwrap_or_else(|| "http://localhost:8081".into()),
             "default",
@@ -75,8 +90,9 @@ impl AppState {
 
         Ok(Self {
             config: Arc::new(config),
-            store,
+            repos,
             sessions,
+            data_keys,
             jwt: Arc::new(jwt),
             rate_limiter,
             policy,
@@ -106,7 +122,7 @@ impl AppState {
         }
         if count >= self.config.lockout_max_attempts as i64 {
             let until = Utc::now() + Duration::seconds(self.config.lockout_duration_secs as i64);
-            self.store.set_locked_until(user_id, until).await?;
+            self.repos.users().set_locked_until(user_id, until).await?;
         }
         Ok(())
     }
@@ -135,8 +151,48 @@ impl AppState {
         ip: Option<&str>,
         metadata: serde_json::Value,
     ) -> Result<(), AuthError> {
-        self.store
-            .audit(account_id, actor, action, resource, ip, metadata)
-            .await
+        self.repos
+            .audit()
+            .audit(account_id, actor, action, resource, ip, metadata.clone())
+            .await?;
+
+        if let Some(aid) = account_id {
+            let state = self.clone();
+            let action_owned = action.to_string();
+            let resource_owned = resource.map(str::to_string);
+            let actor_owned = actor.map(str::to_string);
+            let metadata_webhook = metadata.clone();
+            tokio::spawn(async move {
+                super::ops::dispatch_webhook(
+                    &state,
+                    aid,
+                    &format!("audit.{action_owned}"),
+                    serde_json::json!({
+                        "action": action_owned,
+                        "resource": resource_owned,
+                        "actor": actor_owned,
+                        "metadata": metadata_webhook,
+                    }),
+                );
+            });
+        }
+
+        if let Some(url) = &self.config.audit_export_webhook {
+            let client = reqwest::Client::new();
+            let body = serde_json::json!({
+                "account_id": account_id,
+                "actor": actor,
+                "action": action,
+                "resource": resource,
+                "ip": ip,
+                "metadata": metadata,
+            });
+            let url = url.clone();
+            tokio::spawn(async move {
+                let _ = client.post(&url).json(&body).send().await;
+            });
+        }
+
+        Ok(())
     }
 }

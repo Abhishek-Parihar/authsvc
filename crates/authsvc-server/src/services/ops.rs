@@ -4,7 +4,7 @@ use uuid::Uuid;
 use super::state::AppState;
 
 pub async fn rotate_keys(state: &AppState) -> Result<String, AuthError> {
-    state.store.deactivate_signing_keys().await?;
+    state.repos.signing_keys().deactivate_signing_keys().await?;
 
     let kid = format!("authsvc-key-{}", &Uuid::new_v4().to_string()[..8]);
     let kid_clone = kid.clone();
@@ -14,11 +14,12 @@ pub async fn rotate_keys(state: &AppState) -> Result<String, AuthError> {
         .map_err(|e| AuthError::Internal(e.to_string()))??;
 
     state
-        .store
+        .repos
+        .signing_keys()
         .store_signing_key(&kid, &priv_pem, &pub_pem)
         .await?;
 
-    state.jwt.reload(&state.store).await?;
+    state.jwt.reload(state.repos.signing_keys()).await?;
 
     state
         .audit(
@@ -53,22 +54,50 @@ fn generate_rsa_keypair() -> Result<(String, String), AuthError> {
     Ok((priv_pem, pub_pem))
 }
 
-pub async fn dispatch_webhook(
+pub fn dispatch_webhook(
     state: &AppState,
     account_id: Uuid,
     event: &str,
     payload: serde_json::Value,
 ) {
-    if let Ok(hooks) = state.store.list_webhooks_for_event(account_id, event).await {
-        for (id, url, secret) in hooks {
-            let state = state.clone();
-            let event = event.to_string();
-            let body = payload.clone();
-            tokio::spawn(async move {
-                deliver_webhook(&state, id, &url, &secret, &event, body).await;
-            });
+    dispatch_webhook_inner(state, account_id, event, payload);
+}
+
+fn dispatch_webhook_inner(
+    state: &AppState,
+    account_id: Uuid,
+    event: &str,
+    payload: serde_json::Value,
+) {
+    let state = state.clone();
+    let event = event.to_string();
+    tokio::spawn(async move {
+        if let Ok(hooks) = state
+            .repos
+            .webhooks()
+            .list_webhooks_for_event(account_id, &event)
+            .await
+        {
+            for (id, url, secret_enc) in hooks {
+                let state = state.clone();
+                let event = event.clone();
+                let body = payload.clone();
+                tokio::spawn(async move {
+                    let secret = match crate::crypto::secrets::decrypt_string(
+                        &state.data_keys,
+                        "webhook_secret",
+                        &secret_enc,
+                    )
+                    .await
+                    {
+                        Ok(s) => s,
+                        Err(_) => secret_enc,
+                    };
+                    deliver_webhook(&state, id, &url, &secret, &event, body).await;
+                });
+            }
         }
-    }
+    });
 }
 
 async fn deliver_webhook(
@@ -96,7 +125,8 @@ async fn deliver_webhook(
         match result {
             Ok(resp) if resp.status().is_success() => {
                 let _ = state
-                    .store
+                    .repos
+                    .webhooks()
                     .record_webhook_delivery(
                         delivery_id,
                         webhook_id,
@@ -122,7 +152,8 @@ async fn deliver_webhook(
     }
 
     let _ = state
-        .store
+        .repos
+        .webhooks()
         .record_webhook_delivery(
             delivery_id,
             webhook_id,

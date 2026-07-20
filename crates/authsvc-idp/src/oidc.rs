@@ -39,6 +39,31 @@ impl GenericOidcProvider {
             userinfo_url: userinfo_url.to_string(),
         })
     }
+
+    pub fn from_config(config: &serde_json::Value, redirect_uri: &str) -> Result<Self, AuthError> {
+        Self::new(
+            config["provider"]
+                .as_str()
+                .or_else(|| config["name"].as_str())
+                .unwrap_or("oidc"),
+            config["auth_url"]
+                .as_str()
+                .ok_or_else(|| AuthError::Validation("auth_url required".into()))?,
+            config["token_url"]
+                .as_str()
+                .ok_or_else(|| AuthError::Validation("token_url required".into()))?,
+            config["userinfo_url"]
+                .as_str()
+                .ok_or_else(|| AuthError::Validation("userinfo_url required".into()))?,
+            config["client_id"]
+                .as_str()
+                .ok_or_else(|| AuthError::Validation("client_id required".into()))?,
+            config["client_secret"]
+                .as_str()
+                .ok_or_else(|| AuthError::Validation("client_secret required".into()))?,
+            redirect_uri,
+        )
+    }
 }
 
 #[async_trait]

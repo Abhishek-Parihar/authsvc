@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::{
     handlers::SharedState,
     middleware::{api_key_has_admin, authenticate, extract_api_key, AuthContext},
-    services::api_keys::validate_api_key,
+    services::{api_keys::validate_api_key, auth::is_bootstrap_open},
 };
 
 pub async fn require_admin(
@@ -50,8 +50,9 @@ pub async fn require_bootstrap_or_open(
     request: Request,
     next: Next,
 ) -> Response {
-    let user_count = match state.store.count_users().await {
-        Ok(n) => n,
+    let user_count = match is_bootstrap_open(state.as_ref()).await {
+        Ok(true) => 0,
+        Ok(false) => 1,
         Err(_) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,

@@ -2,13 +2,12 @@ use authsvc_core::{
     client::CreateOAuthClient,
     user::CreateUser,
     website::ClientType,
-    AccountOption, AccountRepository, AuthError, ClientRepository, MembershipRepository,
-    RefreshTokenRepository, TokenContext, UserRepository, WebsiteRepository,
+    AccountOption, AuthError, TokenContext,
 };
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 
-use super::{login_selection, state::AppState};
+use super::{login_selection, platform, state::AppState};
 use crate::crypto::{
     jwt::AccessTokenClaims,
     password::{generate_refresh_token, hash_password, hash_token, verify_password, verify_secret},
@@ -55,36 +54,41 @@ pub async fn validate_bearer_token(state: &AppState, token: &str) -> Result<Acce
     state.jwt.validate_access_token(token)
 }
 
+pub async fn is_bootstrap_open(state: &AppState) -> Result<bool, AuthError> {
+    Ok(state.repos.users().count_users().await? == 0)
+}
+
 pub async fn register_user(
     state: &AppState,
     email: &str,
     password: &str,
     display_name: Option<String>,
-) -> Result<authsvc_core::User, AuthError> {
+) -> Result<(authsvc_core::User, Uuid), AuthError> {
     if password.len() < 8 {
         return Err(AuthError::Validation(
             "password must be at least 8 characters".into(),
         ));
     }
 
-    let account = AccountRepository::find_by_slug(&state.store, &state.config.default_account_slug)
-        .await?
-        .ok_or_else(|| AuthError::NotFound("account".into()))?;
+    let account = platform::default_account(state).await?;
 
     let hash = hash_password(password)?;
-    let user = UserRepository::create(
-        &state.store,
-        &CreateUser {
-            email: email.to_lowercase(),
-            password: password.to_string(),
-            display_name,
-        },
-        &hash,
-    )
-    .await?;
+    let user = state
+        .repos
+        .users()
+        .create(
+            &CreateUser {
+                email: email.to_lowercase(),
+                password: password.to_string(),
+                display_name,
+            },
+            &hash,
+        )
+        .await?;
 
     state
-        .store
+        .repos
+        .postgres()
         .assign_admin_membership(user.id, account.id)
         .await?;
     state
@@ -97,19 +101,22 @@ pub async fn register_user(
             serde_json::json!({"email": user.email}),
         )
         .await?;
-    Ok(user)
+    Ok((user, account.id))
 }
 
-pub async fn password_login(
+/// Verify email/password credentials and return the authenticated user.
+pub async fn verify_user_password(
     state: &AppState,
     email: &str,
     password: &str,
-    client_id: &str,
     ip: Option<&str>,
-) -> Result<TokenResponse, AuthError> {
-    state.rate_limiter.check(&format!("login:{email}")).await?;
-
-    let user = match UserRepository::find_by_email(&state.store, &email.to_lowercase()).await? {
+) -> Result<authsvc_core::User, AuthError> {
+    let user = match state
+        .repos
+        .users()
+        .find_by_email(&email.to_lowercase())
+        .await?
+    {
         Some(u) => u,
         None => {
             state
@@ -154,14 +161,31 @@ pub async fn password_login(
     }
 
     state.clear_failed_login(email).await?;
+    Ok(user)
+}
+
+pub async fn password_login(
+    state: &AppState,
+    email: &str,
+    password: &str,
+    client_id: &str,
+    ip: Option<&str>,
+) -> Result<TokenResponse, AuthError> {
+    state.rate_limiter.check(&format!("login:{email}")).await?;
+
+    let user = verify_user_password(state, email, password, ip).await?;
 
     if user.mfa_enabled {
         let challenge_id = Uuid::new_v4();
-        let client = ClientRepository::find_by_client_id(&state.store, client_id)
+        let client = state
+            .repos
+            .clients()
+            .find_by_client_id(client_id)
             .await?
             .ok_or(AuthError::ClientNotFound)?;
         state
-            .store
+            .repos
+            .mfa()
             .store_mfa_challenge(
                 challenge_id,
                 user.id,
@@ -175,7 +199,10 @@ pub async fn password_login(
         return Ok(resp);
     }
 
-    let client = ClientRepository::find_by_client_id(&state.store, client_id)
+    let client = state
+        .repos
+        .clients()
+        .find_by_client_id(client_id)
         .await?
         .ok_or(AuthError::ClientNotFound)?;
 
@@ -194,6 +221,18 @@ pub async fn complete_login(
         .filter(|a| a.status == "active")
         .collect();
 
+    let account_id = if let Some(acc) = active.first() {
+        acc.account_id
+    } else {
+        state.repos.portal().website_account_id(client.website_id).await?
+    };
+
+    if state.repos.postgres().account_enforce_mfa(account_id).await?
+        && !user.mfa_enabled
+    {
+        return Err(AuthError::Forbidden);
+    }
+
     if active.len() > 1 {
         let selection_id =
             login_selection::create_login_selection(state, user.id, &client.client_id).await?;
@@ -204,12 +243,6 @@ pub async fn complete_login(
         return Ok(resp);
     }
 
-    let account_id = if let Some(acc) = active.first() {
-        acc.account_id
-    } else {
-        state.store.website_account_id(client.website_id).await?
-    };
-
     issue_user_tokens_for_account(state, user, client, account_id).await
 }
 
@@ -219,15 +252,24 @@ pub async fn complete_account_selection(
     account_id: Uuid,
 ) -> Result<TokenResponse, AuthError> {
     let selection = login_selection::consume_login_selection(state, selection_id).await?;
-    let user = UserRepository::find_by_id(&state.store, selection.user_id)
+    let user = state
+        .repos
+        .users()
+        .find_by_id(selection.user_id)
         .await?
         .ok_or(AuthError::UserNotFound)?;
-    let client = ClientRepository::find_by_client_id(&state.store, &selection.client_id)
+    let client = state
+        .repos
+        .clients()
+        .find_by_client_id(&selection.client_id)
         .await?
         .ok_or(AuthError::ClientNotFound)?;
 
-    let member =
-        MembershipRepository::get_account_member(&state.store, account_id, user.id).await?;
+    let member = state
+        .repos
+        .memberships()
+        .get_account_member(account_id, user.id)
+        .await?;
     if member.as_ref().map(|m| m.status.as_str()) != Some("active") {
         return Err(AuthError::Forbidden);
     }
@@ -245,7 +287,10 @@ pub async fn client_credentials_grant(
         .check(&format!("token:{client_id}"))
         .await?;
 
-    let client = ClientRepository::find_by_client_id(&state.store, client_id)
+    let client = state
+        .repos
+        .clients()
+        .find_by_client_id(client_id)
         .await?
         .ok_or(AuthError::InvalidClientCredentials)?;
 
@@ -262,7 +307,7 @@ pub async fn client_credentials_grant(
         return Err(AuthError::InvalidClientCredentials);
     }
 
-    let account_id = state.store.website_account_id(client.website_id).await?;
+    let account_id = state.repos.portal().website_account_id(client.website_id).await?;
     let scopes = client.scopes.clone();
     let (access_token, _) = state.jwt.issue_access_token(
         client.id,
@@ -284,13 +329,17 @@ pub async fn refresh_token_grant(
     refresh_token: &str,
     client_id: &str,
 ) -> Result<TokenResponse, AuthError> {
-    let client = ClientRepository::find_by_client_id(&state.store, client_id)
+    let client = state
+        .repos
+        .clients()
+        .find_by_client_id(client_id)
         .await?
         .ok_or(AuthError::ClientNotFound)?;
 
     let token_hash = hash_token(refresh_token);
     let record = state
-        .store
+        .repos
+        .refresh_tokens()
         .consume(&token_hash)
         .await?
         .ok_or(AuthError::InvalidToken)?;
@@ -300,7 +349,10 @@ pub async fn refresh_token_grant(
     }
 
     let user = match record.user_id {
-        Some(uid) => UserRepository::find_by_id(&state.store, uid)
+        Some(uid) => state
+            .repos
+            .users()
+            .find_by_id(uid)
             .await?
             .ok_or(AuthError::UserNotFound)?,
         None => return Err(AuthError::InvalidToken),
@@ -314,7 +366,7 @@ pub async fn issue_user_tokens(
     user: &authsvc_core::User,
     client: &authsvc_core::OAuthClient,
 ) -> Result<TokenResponse, AuthError> {
-    let account_id = state.store.website_account_id(client.website_id).await?;
+    let account_id = state.repos.portal().website_account_id(client.website_id).await?;
     issue_user_tokens_for_account(state, user, client, account_id).await
 }
 
@@ -333,8 +385,11 @@ async fn resolve_token_context(
     client: &authsvc_core::OAuthClient,
     account_id: Uuid,
 ) -> Result<TokenContext, AuthError> {
-    let member =
-        MembershipRepository::get_account_member(&state.store, account_id, user_id).await?;
+    let member = state
+        .repos
+        .memberships()
+        .get_account_member(account_id, user_id)
+        .await?;
     if member.as_ref().map(|m| m.status.as_str()) != Some("active") {
         return Err(AuthError::Forbidden);
     }
@@ -381,7 +436,8 @@ async fn issue_user_tokens_with_family(
     let expires_at = Utc::now() + Duration::seconds(state.config.refresh_token_ttl_secs as i64);
 
     state
-        .store
+        .repos
+        .refresh_tokens()
         .store(
             &refresh_hash,
             Some(user.id),
@@ -407,21 +463,13 @@ pub async fn create_oauth_client(
     name: &str,
     redirect_uris: Vec<String>,
 ) -> Result<(authsvc_core::OAuthClient, Option<String>), AuthError> {
-    let account = AccountRepository::find_by_slug(&state.store, &state.config.default_account_slug)
-        .await?
-        .ok_or_else(|| AuthError::NotFound("account".into()))?;
-
-    let website = WebsiteRepository::find_by_slug(
-        &state.store,
-        account.id,
-        &state.config.default_website_slug,
-    )
-    .await?
-    .ok_or_else(|| AuthError::NotFound("website".into()))?;
+    let website = platform::default_website(state).await?;
 
     let client_id = format!("cli_{}", &Uuid::new_v4().to_string().replace('-', "")[..16]);
-    ClientRepository::create(
-        &state.store,
+    state
+        .repos
+        .clients()
+        .create(
         &CreateOAuthClient {
             website_id: website.id,
             name: name.to_string(),
@@ -444,8 +492,12 @@ pub async fn create_oauth_client(
 
 pub async fn revoke_refresh_token(state: &AppState, token: &str) -> Result<(), AuthError> {
     let token_hash = hash_token(token);
-    if let Some(record) = state.store.consume(&token_hash).await? {
-        state.store.revoke_family(record.family_id).await?;
+    if let Some(record) = state.repos.refresh_tokens().consume(&token_hash).await? {
+        state
+            .repos
+            .refresh_tokens()
+            .revoke_family(record.family_id)
+            .await?;
         state
             .audit(
                 Some(record.account_id),

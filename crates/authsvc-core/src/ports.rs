@@ -2,12 +2,12 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::{
-    account::{Account, CreateAccount},
+    account::{Account, AccountOption, CreateAccount},
     client::{CreateOAuthClient, OAuthClient},
     membership::{AccountMember, WebsiteMember},
     role::{AuthzCheck, AuthzResult, Permission, Role},
     user::{CreateUser, User},
-    website::{CreateWebsite, Website},
+    website::{CreateWebsite, PortalInfo, Website},
     AuthError,
 };
 
@@ -16,6 +16,12 @@ pub trait UserRepository: Send + Sync {
     async fn create(&self, user: &CreateUser, password_hash: &str) -> Result<User, AuthError>;
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, AuthError>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, AuthError>;
+    async fn set_locked_until(
+        &self,
+        user_id: Uuid,
+        until: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), AuthError>;
+    async fn count_users(&self) -> Result<i64, AuthError>;
 }
 
 #[async_trait]
@@ -65,6 +71,7 @@ pub trait ClientRepository: Send + Sync {
         client_secret_hash: Option<&str>,
     ) -> Result<(OAuthClient, Option<String>), AuthError>;
     async fn find_by_client_id(&self, client_id: &str) -> Result<Option<OAuthClient>, AuthError>;
+    async fn find_client_id_by_uuid(&self, id: Uuid) -> Result<Option<String>, AuthError>;
 }
 
 #[async_trait]
@@ -146,6 +153,337 @@ pub trait WebAuthnRepository: Send + Sync {
     async fn list_credentials(&self, user_id: Uuid) -> Result<Vec<WebAuthnCredential>, AuthError>;
     async fn update_sign_count(&self, id: Uuid, sign_count: i64) -> Result<(), AuthError>;
     async fn find_user_by_email(&self, email: &str) -> Result<Option<User>, AuthError>;
+}
+
+#[async_trait]
+pub trait OtpStore: Send + Sync {
+    async fn store_email_otp(
+        &self,
+        email: &str,
+        code_hash: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), AuthError>;
+    async fn consume_email_otp(&self, email: &str, code_hash: &str) -> Result<bool, AuthError>;
+    async fn store_phone_otp(
+        &self,
+        phone: &str,
+        code_hash: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), AuthError>;
+    async fn consume_phone_otp(&self, phone: &str, code_hash: &str) -> Result<bool, AuthError>;
+    async fn find_user_id_by_phone(&self, phone: &str) -> Result<Option<Uuid>, AuthError>;
+    async fn link_verified_phone(&self, user_id: Uuid, phone: &str) -> Result<(), AuthError>;
+}
+
+#[async_trait]
+pub trait MfaStore: Send + Sync {
+    async fn store_mfa_secret(
+        &self,
+        user_id: Uuid,
+        encrypted: &str,
+        recovery_hashes: &[String],
+    ) -> Result<(), AuthError>;
+    async fn get_mfa_secret(&self, user_id: Uuid) -> Result<Option<String>, AuthError>;
+    async fn store_mfa_challenge(
+        &self,
+        id: Uuid,
+        user_id: Uuid,
+        client_id: Uuid,
+        expires: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), AuthError>;
+    async fn complete_mfa_challenge(&self, id: Uuid) -> Result<Option<(Uuid, Uuid)>, AuthError>;
+    async fn disable_mfa(&self, user_id: Uuid) -> Result<(), AuthError>;
+}
+
+#[async_trait]
+pub trait MagicLinkStore: Send + Sync {
+    async fn store_magic_link(
+        &self,
+        hash: &str,
+        email: &str,
+        expires: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), AuthError>;
+    async fn consume_magic_link(&self, hash: &str) -> Result<Option<String>, AuthError>;
+}
+
+#[async_trait]
+pub trait OidcFlowStore: Send + Sync {
+    #[allow(clippy::too_many_arguments)]
+    async fn store_auth_code(
+        &self,
+        code: &str,
+        client_id: Uuid,
+        user_id: Uuid,
+        redirect_uri: &str,
+        code_challenge: &str,
+        scopes: &[String],
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), AuthError>;
+    async fn consume_auth_code(
+        &self,
+        code: &str,
+        redirect_uri: &str,
+        code_verifier: &str,
+    ) -> Result<Option<(Uuid, Uuid, Vec<String>)>, AuthError>;
+    async fn store_login_state(
+        &self,
+        state: &str,
+        client_id: &str,
+        redirect_uri: &str,
+        code_challenge: &str,
+        scopes: &[String],
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), AuthError>;
+    async fn get_login_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<(String, String, String, Vec<String>)>, AuthError>;
+}
+
+#[async_trait]
+pub trait FederationStore: Send + Sync {
+    async fn link_identity(
+        &self,
+        user_id: Uuid,
+        provider: &str,
+        subject: &str,
+        email: Option<&str>,
+    ) -> Result<(), AuthError>;
+    async fn find_identity(&self, provider: &str, subject: &str) -> Result<Option<Uuid>, AuthError>;
+    async fn store_federation_state(
+        &self,
+        state: &str,
+        account_id: Uuid,
+        provider: &str,
+        expires: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), AuthError>;
+    async fn consume_federation_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<(Uuid, String)>, AuthError>;
+}
+
+#[async_trait]
+pub trait PortalStore: Send + Sync {
+    async fn find_portal_by_domain(&self, domain: &str) -> Result<Option<PortalInfo>, AuthError>;
+    async fn list_user_account_options(&self, user_id: Uuid) -> Result<Vec<AccountOption>, AuthError>;
+    async fn website_account_id(&self, website_id: Uuid) -> Result<Uuid, AuthError>;
+}
+
+#[async_trait]
+pub trait SigningKeyStore: Send + Sync {
+    async fn store_signing_key(
+        &self,
+        kid: &str,
+        private_pem: &str,
+        public_pem: &str,
+    ) -> Result<(), AuthError>;
+    async fn get_active_signing_key(&self) -> Result<Option<(String, String, String)>, AuthError>;
+    async fn list_signing_keys_for_jwks(
+        &self,
+        grace_secs: u64,
+    ) -> Result<Vec<(String, String)>, AuthError>;
+    async fn deactivate_signing_keys(&self) -> Result<(), AuthError>;
+}
+
+#[async_trait]
+pub trait HealthStore: Send + Sync {
+    async fn ping(&self) -> Result<(), AuthError>;
+}
+
+#[async_trait]
+pub trait AdminStore: Send + Sync {
+    async fn create_website(
+        &self,
+        account_id: Uuid,
+        slug: &str,
+        name: &str,
+        domain: Option<&str>,
+    ) -> Result<serde_json::Value, AuthError>;
+    async fn list_clients(&self, website_id: Uuid) -> Result<Vec<serde_json::Value>, AuthError>;
+    async fn delete_client(&self, id: Uuid) -> Result<(), AuthError>;
+    async fn create_role(
+        &self,
+        account_id: Uuid,
+        name: &str,
+        description: Option<&str>,
+    ) -> Result<Role, AuthError>;
+    async fn create_permission(
+        &self,
+        account_id: Uuid,
+        resource: &str,
+        action: &str,
+    ) -> Result<Permission, AuthError>;
+    async fn add_role_inheritance(
+        &self,
+        child_role_id: Uuid,
+        parent_role_id: Uuid,
+    ) -> Result<(), AuthError>;
+    async fn remove_role_inheritance(
+        &self,
+        child_role_id: Uuid,
+        parent_role_id: Uuid,
+    ) -> Result<(), AuthError>;
+    async fn create_casbin_rule(
+        &self,
+        account_id: Uuid,
+        ptype: &str,
+        v0: Option<&str>,
+        v1: Option<&str>,
+        v2: Option<&str>,
+        v3: Option<&str>,
+        v4: Option<&str>,
+        v5: Option<&str>,
+    ) -> Result<i32, AuthError>;
+    async fn delete_casbin_rule(&self, id: i32) -> Result<(), AuthError>;
+    async fn list_casbin_rules(
+        &self,
+        account_id: Uuid,
+    ) -> Result<
+        Vec<(
+            i32,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )>,
+        AuthError,
+    >;
+}
+
+#[async_trait]
+pub trait ApiKeyStore: Send + Sync {
+    async fn create_api_key(
+        &self,
+        account_id: Uuid,
+        name: &str,
+        prefix: &str,
+        hash: &str,
+        scopes: &[String],
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Uuid, AuthError>;
+    async fn find_api_key(
+        &self,
+        hash: &str,
+    ) -> Result<Option<(Uuid, Uuid, Vec<String>)>, AuthError>;
+    async fn revoke_api_key(&self, id: Uuid) -> Result<(), AuthError>;
+}
+
+#[async_trait]
+pub trait WebhookStore: Send + Sync {
+    async fn create_webhook(
+        &self,
+        account_id: Uuid,
+        url: &str,
+        secret: &str,
+        events: &[String],
+    ) -> Result<Uuid, AuthError>;
+    async fn list_webhooks_for_event(
+        &self,
+        account_id: Uuid,
+        event: &str,
+    ) -> Result<Vec<(Uuid, String, String)>, AuthError>;
+    async fn record_webhook_delivery(
+        &self,
+        id: Uuid,
+        webhook_id: Uuid,
+        event: &str,
+        status: &str,
+        attempts: i32,
+        error: Option<&str>,
+    ) -> Result<(), AuthError>;
+}
+
+#[async_trait]
+pub trait AuditStore: Send + Sync {
+    async fn audit(
+        &self,
+        account_id: Option<Uuid>,
+        actor: Option<&str>,
+        action: &str,
+        resource: Option<&str>,
+        ip: Option<&str>,
+        metadata: serde_json::Value,
+    ) -> Result<(), AuthError>;
+}
+
+#[async_trait]
+pub trait CacheStore: Send + Sync {
+    async fn set_json<T>(&self, key: &str, value: &T, ttl_secs: u64) -> Result<(), AuthError>
+    where
+        T: serde::Serialize + Send + Sync;
+    async fn get_json<T>(&self, key: &str) -> Result<Option<T>, AuthError>
+    where
+        T: serde::de::DeserializeOwned + Send;
+    async fn delete_key(&self, key: &str) -> Result<(), AuthError>;
+}
+
+/// Field-level encryption for secrets at rest (MFA, webhooks, IdP configs).
+#[async_trait]
+pub trait DataKeyStore: Send + Sync {
+    async fn encrypt(&self, plaintext: &[u8], context: &str) -> Result<Vec<u8>, AuthError>;
+    async fn decrypt(&self, ciphertext: &[u8], context: &str) -> Result<Vec<u8>, AuthError>;
+}
+
+#[async_trait]
+pub trait IdpConfigStore: Send + Sync {
+    async fn list_by_account(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<(Uuid, String, bool, serde_json::Value)>, AuthError>;
+    async fn get(
+        &self,
+        account_id: Uuid,
+        provider: &str,
+    ) -> Result<Option<(Uuid, bool, serde_json::Value)>, AuthError>;
+    async fn upsert(
+        &self,
+        account_id: Uuid,
+        provider: &str,
+        enabled: bool,
+        config: serde_json::Value,
+    ) -> Result<Uuid, AuthError>;
+    async fn delete(&self, account_id: Uuid, provider: &str) -> Result<(), AuthError>;
+}
+
+#[async_trait]
+pub trait PrivacyStore: Send + Sync {
+    async fn soft_delete_user(&self, user_id: Uuid) -> Result<(), AuthError>;
+    async fn anonymize_user(&self, user_id: Uuid) -> Result<(), AuthError>;
+    async fn create_export_request(
+        &self,
+        user_id: Uuid,
+        account_id: Uuid,
+    ) -> Result<Uuid, AuthError>;
+    async fn complete_export_request(
+        &self,
+        id: Uuid,
+        artifact: &serde_json::Value,
+    ) -> Result<(), AuthError>;
+    async fn list_user_identities(&self, user_id: Uuid) -> Result<Vec<serde_json::Value>, AuthError>;
+    async fn list_user_audit_events(
+        &self,
+        user_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<serde_json::Value>, AuthError>;
+}
+
+#[async_trait]
+pub trait ScimTokenStore: Send + Sync {
+    async fn create_token(
+        &self,
+        account_id: Uuid,
+        name: &str,
+        token_hash: &str,
+    ) -> Result<Uuid, AuthError>;
+    async fn find_account_by_token_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<Uuid>, AuthError>;
+    async fn revoke_token(&self, id: Uuid) -> Result<(), AuthError>;
 }
 
 /// Resolved auth context when issuing tokens.

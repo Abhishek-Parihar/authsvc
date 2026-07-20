@@ -1,4 +1,4 @@
-use authsvc_core::AccountOption;
+use authsvc_core::{AccountOption, PortalStore};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -48,5 +48,5 @@ pub async fn list_account_options(
     state: &super::state::AppState,
     user_id: Uuid,
 ) -> Result<Vec<AccountOption>, authsvc_core::AuthError> {
-    state.store.list_user_account_options(user_id).await
+    state.repos.portal().list_user_account_options(user_id).await
 }

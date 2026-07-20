@@ -6,7 +6,7 @@ async fn main() -> anyhow::Result<()> {
     observability::init_tracing(config.otel_endpoint.as_deref())?;
     let metrics_handle = observability::init_metrics();
 
-    let state = app::build_state(config.clone()).await?;
+    let state = app::build_state_and_spawn_jobs(config.clone()).await?;
     let router = app::build_router(state, metrics_handle);
 
     let addr = format!("{}:{}", config.host, config.port);
