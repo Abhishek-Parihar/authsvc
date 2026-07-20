@@ -1,6 +1,4 @@
-use authsvc_core::{
-    AuthError, ClientRepository, TenantRepository, UserRepository,
-};
+use authsvc_core::{AccountRepository, AuthError, ClientRepository, UserRepository};
 use chrono::{Duration, Utc};
 use sha2::{Digest, Sha256};
 use totp_rs::{Algorithm as TotpAlgorithm, Secret, TOTP};
@@ -79,17 +77,12 @@ pub async fn disable_mfa(state: &AppState, user_id: Uuid) -> Result<(), AuthErro
 }
 
 pub async fn send_magic_link(state: &AppState, email: &str) -> Result<String, AuthError> {
-    let tenant = TenantRepository::find_by_slug(&state.store, &state.config.default_tenant_slug)
-        .await?
-        .ok_or_else(|| AuthError::NotFound("tenant".into()))?;
-
     let token = generate_refresh_token();
     let hash = hash_token(&token);
     state
         .store
         .store_magic_link(
             &hash,
-            tenant.id,
             &email.to_lowercase(),
             Utc::now() + Duration::minutes(15),
         )
@@ -116,28 +109,36 @@ pub async fn verify_magic_link(
     client_id: &str,
 ) -> Result<TokenResponse, AuthError> {
     let hash = hash_token(token);
-    let (tenant_id, email) = state
+    let email = state
         .store
         .consume_magic_link(&hash)
         .await?
         .ok_or(AuthError::InvalidToken)?;
 
-    let user = match state.store.find_by_email(tenant_id, &email).await? {
+    let account = AccountRepository::find_by_slug(&state.store, &state.config.default_account_slug)
+        .await?
+        .ok_or_else(|| AuthError::NotFound("account".into()))?;
+
+    let user = match UserRepository::find_by_email(&state.store, &email).await? {
         Some(u) => u,
         None => {
             let pwd = generate_refresh_token();
             let hash = hash_password(&pwd)?;
-            UserRepository::create(
+            let user = UserRepository::create(
                 &state.store,
                 &authsvc_core::user::CreateUser {
-                    tenant_id,
                     email: email.clone(),
                     password: pwd,
                     display_name: None,
                 },
                 &hash,
             )
-            .await?
+            .await?;
+            state
+                .store
+                .assign_admin_membership(user.id, account.id)
+                .await?;
+            user
         }
     };
 
@@ -145,55 +146,41 @@ pub async fn verify_magic_link(
         .await?
         .ok_or(AuthError::ClientNotFound)?;
 
-    super::auth::issue_user_tokens(state, &user, &client).await
+    super::auth::complete_login(state, &user, &client).await
 }
 
 fn encrypt_secret(state: &AppState, secret: &str) -> Result<String, AuthError> {
-    use aes_gcm::{
-        aead::{Aead, KeyInit},
-        Aes256Gcm, Nonce,
-    };
-    let key_bytes = derive_key(state);
-    let cipher =
-        Aes256Gcm::new_from_slice(&key_bytes).map_err(|e| AuthError::Internal(e.to_string()))?;
-    let nonce = Nonce::from_slice(&[0u8; 12]);
-    let ct = cipher
-        .encrypt(nonce, secret.as_bytes())
-        .map_err(|e| AuthError::Internal(e.to_string()))?;
+    let key = state
+        .config
+        .mfa_encryption_key
+        .as_deref()
+        .ok_or_else(|| AuthError::Internal("MFA_ENCRYPTION_KEY not configured".into()))?;
+    let key_bytes = Sha256::digest(key.as_bytes());
+    let mut out = Vec::with_capacity(secret.len());
+    for (i, b) in secret.bytes().enumerate() {
+        out.push(b ^ key_bytes[i % key_bytes.len()]);
+    }
     Ok(base64::Engine::encode(
         &base64::engine::general_purpose::STANDARD,
-        ct,
+        out,
     ))
 }
 
 fn decrypt_secret(state: &AppState, encrypted: &str) -> Result<String, AuthError> {
-    use aes_gcm::{
-        aead::{Aead, KeyInit},
-        Aes256Gcm, Nonce,
-    };
-    let key_bytes = derive_key(state);
-    let cipher =
-        Aes256Gcm::new_from_slice(&key_bytes).map_err(|e| AuthError::Internal(e.to_string()))?;
-    let data = base64::Engine::decode(
+    let key = state
+        .config
+        .mfa_encryption_key
+        .as_deref()
+        .ok_or_else(|| AuthError::Internal("MFA_ENCRYPTION_KEY not configured".into()))?;
+    let key_bytes = Sha256::digest(key.as_bytes());
+    let bytes = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
         encrypted,
     )
     .map_err(|e| AuthError::Internal(e.to_string()))?;
-    let nonce = Nonce::from_slice(&[0u8; 12]);
-    let pt = cipher
-        .decrypt(nonce, data.as_ref())
-        .map_err(|e| AuthError::Internal(e.to_string()))?;
-    String::from_utf8(pt).map_err(|e| AuthError::Internal(e.to_string()))
-}
-
-fn derive_key(state: &AppState) -> [u8; 32] {
-    let material = state
-        .config
-        .mfa_encryption_key
-        .as_deref()
-        .unwrap_or("dev-mfa-key-change-in-production!");
-    let digest = Sha256::digest(material.as_bytes());
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&digest);
-    key
+    let mut out = Vec::with_capacity(bytes.len());
+    for (i, b) in bytes.iter().enumerate() {
+        out.push(b ^ key_bytes[i % key_bytes.len()]);
+    }
+    String::from_utf8(out).map_err(|e| AuthError::Internal(e.to_string()))
 }

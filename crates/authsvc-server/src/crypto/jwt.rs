@@ -20,7 +20,9 @@ pub struct AccessTokenClaims {
     pub exp: usize,
     pub iat: usize,
     pub jti: String,
-    pub tenant_id: String,
+    pub account_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub website_id: Option<String>,
     pub client_id: Option<String>,
     pub scope: String,
     pub token_type: String,
@@ -36,7 +38,9 @@ pub struct IdTokenClaims {
     pub email: Option<String>,
     pub email_verified: bool,
     pub name: Option<String>,
-    pub tenant_id: String,
+    pub account_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub website_id: Option<String>,
 }
 
 struct VerifyKey {
@@ -104,7 +108,8 @@ impl JwtKeyStore {
     pub fn issue_access_token(
         &self,
         subject: Uuid,
-        tenant_id: Uuid,
+        account_id: Uuid,
+        website_id: Option<Uuid>,
         client_id: Option<&str>,
         scopes: &[String],
     ) -> Result<(String, AccessTokenClaims), AuthError> {
@@ -120,7 +125,8 @@ impl JwtKeyStore {
             exp: now + self.access_ttl_secs as usize,
             iat: now,
             jti: Uuid::new_v4().to_string(),
-            tenant_id: tenant_id.to_string(),
+            account_id: account_id.to_string(),
+            website_id: website_id.map(|id| id.to_string()),
             client_id: client_id.map(str::to_string),
             scope: scopes.join(" "),
             token_type: "Bearer".into(),
@@ -134,7 +140,12 @@ impl JwtKeyStore {
         Ok((token, claims))
     }
 
-    pub fn issue_id_token(&self, user: &User) -> Result<String, AuthError> {
+    pub fn issue_id_token(
+        &self,
+        user: &User,
+        account_id: Uuid,
+        website_id: Option<Uuid>,
+    ) -> Result<String, AuthError> {
         let key_set = self
             .inner
             .read()
@@ -149,7 +160,8 @@ impl JwtKeyStore {
             email: Some(user.email.clone()),
             email_verified: user.email_verified,
             name: user.display_name.clone(),
-            tenant_id: user.tenant_id.to_string(),
+            account_id: account_id.to_string(),
+            website_id: website_id.map(|id| id.to_string()),
         };
         let mut header = Header::new(Algorithm::RS256);
         header.kid = Some(key_set.active_kid.clone());
@@ -326,7 +338,13 @@ mod tests {
         };
 
         let (token, _) = store
-            .issue_access_token(Uuid::new_v4(), Uuid::new_v4(), Some("cli_test"), &["openid".into()])
+            .issue_access_token(
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                None,
+                Some("cli_test"),
+                &["openid".into()],
+            )
             .unwrap();
         let claims = store.validate_access_token(&token).unwrap();
         assert_eq!(claims.client_id.as_deref(), Some("cli_test"));

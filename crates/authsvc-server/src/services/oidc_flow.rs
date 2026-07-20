@@ -31,7 +31,7 @@ pub async fn authorization_code_grant(
         return Err(AuthError::InvalidToken);
     }
 
-    super::auth::issue_user_tokens(state, &user, &client_row).await
+    super::auth::complete_login(state, &user, &client_row).await
 }
 
 pub async fn create_authorization_redirect(

@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Once;
+use std::time::Duration;
 
 use authsvc_server::{app, config::Config, observability};
 use reqwest::Client;
@@ -34,6 +35,12 @@ async fn test_urls() -> Option<(String, String)> {
         return Some((db, redis));
     }
 
+    const BREW_DB: &str = "postgres://authsvc:authsvc@127.0.0.1:5432/authsvc";
+    const BREW_REDIS: &str = "redis://127.0.0.1:6379";
+    if homebrew_stores_ready(BREW_DB, BREW_REDIS).await {
+        return Some((BREW_DB.into(), BREW_REDIS.into()));
+    }
+
     if !std::path::Path::new("/var/run/docker.sock").exists() {
         return None;
     }
@@ -53,6 +60,27 @@ async fn test_urls() -> Option<(String, String)> {
     );
 
     Some((db_url, redis_url))
+}
+
+async fn homebrew_stores_ready(db_url: &str, redis_url: &str) -> bool {
+    let pg_ok = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(2))
+        .connect(db_url)
+        .await
+        .is_ok();
+    if !pg_ok {
+        return false;
+    }
+
+    let redis_host = redis_url
+        .trim_start_matches("redis://")
+        .split('/')
+        .next()
+        .unwrap_or("127.0.0.1:6379");
+    let (host, port) = redis_host.split_once(':').unwrap_or(("127.0.0.1", "6379"));
+    let port: u16 = port.parse().unwrap_or(6379);
+    tokio::net::TcpStream::connect((host, port)).await.is_ok()
 }
 
 async fn spawn_server(db_url: String, redis_url: String) -> (SocketAddr, tokio::task::JoinHandle<()>) {
@@ -86,7 +114,7 @@ async fn spawn_server(db_url: String, redis_url: String) -> (SocketAddr, tokio::
 #[tokio::test]
 async fn register_login_refresh_authz_revoke_flow() {
     let Some((db_url, redis_url)) = test_urls().await else {
-        eprintln!("SKIP integration test: set DATABASE_URL+REDIS_URL or start Docker");
+        eprintln!("SKIP integration test: run `make brew-up` or set DATABASE_URL+REDIS_URL");
         return;
     };
     let (addr, _server) = spawn_server(db_url, redis_url).await;
@@ -175,7 +203,7 @@ async fn register_login_refresh_authz_revoke_flow() {
         .post(format!("{base}/v1/authz/check"))
         .json(&json!({
             "subject_id": user_id,
-            "tenant_id": reg["tenant_id"].as_str().unwrap(),
+            "account_id": reg["account_id"].as_str().unwrap(),
             "resource": "clients",
             "action": "write"
         }))
@@ -261,7 +289,7 @@ async fn register_login_refresh_authz_revoke_flow() {
 #[tokio::test]
 async fn jwt_key_rotation_preserves_grace_validation() {
     let Some((db_url, redis_url)) = test_urls().await else {
-        eprintln!("SKIP integration test: set DATABASE_URL+REDIS_URL or start Docker");
+        eprintln!("SKIP integration test: run `make brew-up` or set DATABASE_URL+REDIS_URL");
         return;
     };
     let (addr, _server) = spawn_server(db_url, redis_url).await;
@@ -372,7 +400,7 @@ async fn jwt_key_rotation_preserves_grace_validation() {
 #[tokio::test]
 async fn api_key_grant_and_admin_access() {
     let Some((db_url, redis_url)) = test_urls().await else {
-        eprintln!("SKIP integration test: set DATABASE_URL+REDIS_URL or start Docker");
+        eprintln!("SKIP integration test: run `make brew-up` or set DATABASE_URL+REDIS_URL");
         return;
     };
     let (addr, _server) = spawn_server(db_url, redis_url).await;
@@ -395,13 +423,13 @@ async fn api_key_grant_and_admin_access() {
         .await
         .expect("register json");
 
-    let tenant_id = reg["tenant_id"].as_str().expect("tenant_id");
+    let account_id = reg["account_id"].as_str().expect("account_id");
 
     let key_resp = client
         .post(format!("{base}/v1/api-keys"))
         .header("Authorization", "Bearer test-bootstrap-secret")
         .json(&json!({
-            "tenant_id": tenant_id,
+            "account_id": account_id,
             "name": "svc-key",
             "scopes": ["admin", "read"]
         }))
@@ -448,7 +476,7 @@ async fn api_key_grant_and_admin_access() {
 #[tokio::test]
 async fn federation_start_returns_authorization_url() {
     let Some((db_url, redis_url)) = test_urls().await else {
-        eprintln!("SKIP integration test: set DATABASE_URL+REDIS_URL or start Docker");
+        eprintln!("SKIP integration test: run `make brew-up` or set DATABASE_URL+REDIS_URL");
         return;
     };
 

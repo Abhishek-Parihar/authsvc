@@ -2,7 +2,8 @@ import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 
 export type TokenClaims = JWTPayload & {
   sub: string;
-  tenant_id: string;
+  account_id: string;
+  website_id?: string;
   scope?: string;
   client_id?: string;
 };

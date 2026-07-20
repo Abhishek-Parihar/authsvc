@@ -4,7 +4,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use authsvc_core::AuthError;
+use authsvc_core::{AccountRepository, AuthError};
 use base64::Engine;
 use serde::Deserialize;
 use serde_json::json;
@@ -13,13 +13,15 @@ use crate::{
     handlers::{ApiError, AppResult, SharedState},
     services::{
         auth::{
-            client_credentials_grant, create_oauth_client, password_login, refresh_token_grant,
-            register_user, revoke_refresh_token, validate_bearer_token,
+            client_credentials_grant, complete_account_selection, create_oauth_client,
+            password_login, refresh_token_grant, register_user, revoke_refresh_token,
+            validate_bearer_token,
         },
         api_keys::api_key_grant,
         authz::complete_mfa_login,
         mfa::{disable_mfa, enroll_totp, send_magic_link, verify_magic_link},
         oidc_flow::authorization_code_grant,
+        otp::{send_email_otp, send_phone_otp, verify_email_otp, verify_phone_otp},
     },
 };
 
@@ -45,10 +47,14 @@ pub async fn register(
         .check(&format!("register:{}", body.email))
         .await?;
     let user = register_user(&state, &body.email, &body.password, body.display_name).await?;
+    let account = AccountRepository::find_by_slug(&state.store, &state.config.default_account_slug)
+        .await?
+        .ok_or_else(|| ApiError(AuthError::NotFound("account".into())))?;
     Ok(Json(json!({
         "id": user.id,
         "email": user.email,
-        "tenant_id": user.tenant_id
+        "status": user.status,
+        "account_id": account.id
     })))
 }
 
@@ -293,4 +299,78 @@ pub async fn extract_bearer_user(
         .strip_prefix("Bearer ")
         .ok_or(ApiError(AuthError::InvalidToken))?;
     Ok(validate_bearer_token(state, token).await?)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SelectAccountRequest {
+    pub selection_id: String,
+    pub account_id: String,
+}
+
+pub async fn select_account(
+    State(state): State<SharedState>,
+    Json(body): Json<SelectAccountRequest>,
+) -> AppResult<impl IntoResponse> {
+    let selection_id = uuid::Uuid::parse_str(&body.selection_id)
+        .map_err(|_| ApiError(AuthError::Validation("invalid selection_id".into())))?;
+    let account_id = uuid::Uuid::parse_str(&body.account_id)
+        .map_err(|_| ApiError(AuthError::Validation("invalid account_id".into())))?;
+    let tokens = complete_account_selection(&state, selection_id, account_id).await?;
+    Ok(Json(tokens))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EmailOtpSendRequest {
+    pub email: String,
+}
+
+pub async fn email_otp_send(
+    State(state): State<SharedState>,
+    Json(body): Json<EmailOtpSendRequest>,
+) -> AppResult<impl IntoResponse> {
+    let code = send_email_otp(&state, &body.email).await?;
+    Ok(Json(json!({"sent": true, "dev_code": code})))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EmailOtpVerifyRequest {
+    pub email: String,
+    pub code: String,
+    pub client_id: String,
+}
+
+pub async fn email_otp_verify(
+    State(state): State<SharedState>,
+    Json(body): Json<EmailOtpVerifyRequest>,
+) -> AppResult<impl IntoResponse> {
+    let tokens = verify_email_otp(&state, &body.email, &body.code, &body.client_id).await?;
+    Ok(Json(tokens))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PhoneOtpSendRequest {
+    pub phone: String,
+}
+
+pub async fn phone_otp_send(
+    State(state): State<SharedState>,
+    Json(body): Json<PhoneOtpSendRequest>,
+) -> AppResult<impl IntoResponse> {
+    let code = send_phone_otp(&state, &body.phone).await?;
+    Ok(Json(json!({"sent": true, "dev_code": code})))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PhoneOtpVerifyRequest {
+    pub phone: String,
+    pub code: String,
+    pub client_id: String,
+}
+
+pub async fn phone_otp_verify(
+    State(state): State<SharedState>,
+    Json(body): Json<PhoneOtpVerifyRequest>,
+) -> AppResult<impl IntoResponse> {
+    let tokens = verify_phone_otp(&state, &body.phone, &body.code, &body.client_id).await?;
+    Ok(Json(tokens))
 }

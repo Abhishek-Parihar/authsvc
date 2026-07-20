@@ -1,4 +1,4 @@
-use authsvc_core::{AuthError, ClientRepository, TenantRepository, UserRepository};
+use authsvc_core::{AuthError, ClientRepository, UserRepository};
 use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
@@ -136,11 +136,7 @@ impl WebAuthnService {
             .await?
             .ok_or(AuthError::ClientNotFound)?;
 
-        let tenant = TenantRepository::find_by_slug(&state.store, &state.config.default_tenant_slug)
-            .await?
-            .ok_or_else(|| AuthError::NotFound("tenant".into()))?;
-
-        let user = UserRepository::find_by_email(&state.store, tenant.id, &email.to_lowercase())
+        let user = UserRepository::find_by_email(&state.store, &email.to_lowercase())
             .await?
             .ok_or(AuthError::UserNotFound)?;
 
@@ -223,7 +219,7 @@ impl WebAuthnService {
 
         state
             .audit(
-                Some(user.tenant_id),
+                None,
                 Some(&user.id.to_string()),
                 "login.success",
                 Some("webauthn"),
@@ -232,7 +228,7 @@ impl WebAuthnService {
             )
             .await?;
 
-        super::auth::issue_user_tokens(state, &user, &client).await
+        super::auth::complete_login(state, &user, &client).await
     }
 }
 

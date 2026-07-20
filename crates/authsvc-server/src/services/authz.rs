@@ -1,4 +1,4 @@
-use authsvc_core::{AuthError, AuthzCheck, AuthzResult, PolicyEvaluator};
+use authsvc_core::{AuthError, AuthzCheck, AuthzResult, ClientRepository, PolicyEvaluator, UserRepository};
 
 use super::state::AppState;
 
@@ -12,9 +12,7 @@ pub async fn complete_mfa_login(
     challenge_id: uuid::Uuid,
     totp_code: &str,
 ) -> Result<super::auth::TokenResponse, AuthError> {
-    use authsvc_core::UserRepository;
     use crate::services::mfa::verify_totp;
-    use sqlx::Row;
 
     let (user_id, client_uuid) = state
         .store
@@ -28,28 +26,15 @@ pub async fn complete_mfa_login(
         .await?
         .ok_or(AuthError::UserNotFound)?;
 
-    let row = sqlx::query(
-        "SELECT id, tenant_id, client_id, client_secret_hash, name, grant_types, redirect_uris, scopes, is_confidential, created_at
-         FROM oauth_clients WHERE id = $1",
-    )
-    .bind(client_uuid)
-    .fetch_optional(state.store.pool())
-    .await
-    .map_err(|e| AuthError::Internal(e.to_string()))?
-    .ok_or(AuthError::ClientNotFound)?;
+    let client_id: String = sqlx::query_scalar("SELECT client_id FROM oauth_clients WHERE id = $1")
+        .bind(client_uuid)
+        .fetch_one(state.store.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
 
-    let client = authsvc_core::OAuthClient {
-        id: row.get("id"),
-        tenant_id: row.get("tenant_id"),
-        client_id: row.get("client_id"),
-        client_secret_hash: row.get("client_secret_hash"),
-        name: row.get("name"),
-        grant_types: row.get("grant_types"),
-        redirect_uris: row.get("redirect_uris"),
-        scopes: row.get("scopes"),
-        is_confidential: row.get("is_confidential"),
-        created_at: row.get("created_at"),
-    };
+    let client = ClientRepository::find_by_client_id(&state.store, &client_id)
+        .await?
+        .ok_or(AuthError::ClientNotFound)?;
 
-    super::auth::issue_user_tokens(state, &user, &client).await
+    super::auth::complete_login(state, &user, &client).await
 }

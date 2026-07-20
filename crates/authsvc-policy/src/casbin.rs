@@ -33,7 +33,7 @@ pub struct CasbinRuleRow {
 
 #[async_trait]
 pub trait CasbinPolicyLoader: Send + Sync {
-    async fn list_rules(&self, tenant_id: Uuid) -> Result<Vec<CasbinRuleRow>, AuthError>;
+    async fn list_rules(&self, account_id: Uuid) -> Result<Vec<CasbinRuleRow>, AuthError>;
 }
 
 struct CachedRules {
@@ -56,25 +56,25 @@ impl CasbinEvaluator {
         }
     }
 
-    pub fn invalidate_tenant(&self, tenant_id: Uuid) {
+    pub fn invalidate_account(&self, account_id: Uuid) {
         if let Ok(mut cache) = self.cache.write() {
-            cache.remove(&tenant_id);
+            cache.remove(&account_id);
         }
     }
 
-    async fn rules_for(&self, tenant_id: Uuid) -> Result<Vec<CasbinRuleRow>, AuthError> {
+    async fn rules_for(&self, account_id: Uuid) -> Result<Vec<CasbinRuleRow>, AuthError> {
         if let Ok(cache) = self.cache.read() {
-            if let Some(entry) = cache.get(&tenant_id) {
+            if let Some(entry) = cache.get(&account_id) {
                 if entry.loaded_at.elapsed() < self.cache_ttl {
                     return Ok(entry.rules.clone());
                 }
             }
         }
 
-        let rules = self.loader.list_rules(tenant_id).await?;
+        let rules = self.loader.list_rules(account_id).await?;
         if let Ok(mut cache) = self.cache.write() {
             cache.insert(
-                tenant_id,
+                account_id,
                 CachedRules {
                     rules: rules.clone(),
                     loaded_at: Instant::now(),
@@ -84,8 +84,8 @@ impl CasbinEvaluator {
         Ok(rules)
     }
 
-    async fn enforcer_for(&self, tenant_id: Uuid) -> Result<Enforcer, AuthError> {
-        let rules = self.rules_for(tenant_id).await?;
+    async fn enforcer_for(&self, account_id: Uuid) -> Result<Enforcer, AuthError> {
+        let rules = self.rules_for(account_id).await?;
         let model = DefaultModel::from_str(MODEL)
             .await
             .map_err(|e| AuthError::Internal(e.to_string()))?;
@@ -123,7 +123,7 @@ impl PolicyEvaluator for CasbinEvalWrapper {
 #[async_trait]
 impl PolicyEvaluator for CasbinEvaluator {
     async fn check(&self, req: &AuthzCheck) -> Result<AuthzResult, AuthError> {
-        let enforcer = self.enforcer_for(req.tenant_id).await?;
+        let enforcer = self.enforcer_for(req.account_id).await?;
         let sub = format!("user:{}", req.subject_id);
         let allowed = enforcer
             .enforce((sub.as_str(), req.resource.as_str(), req.action.as_str()))
@@ -151,14 +151,14 @@ mod tests {
 
     #[async_trait]
     impl CasbinPolicyLoader for StubLoader {
-        async fn list_rules(&self, _tenant_id: Uuid) -> Result<Vec<CasbinRuleRow>, AuthError> {
+        async fn list_rules(&self, _account_id: Uuid) -> Result<Vec<CasbinRuleRow>, AuthError> {
             Ok(self.rules.clone())
         }
     }
 
     #[tokio::test]
     async fn casbin_allows_matching_policy() {
-        let tenant_id = Uuid::new_v4();
+        let account_id = Uuid::new_v4();
         let user_id = Uuid::new_v4();
         let evaluator = CasbinEvaluator::new(Arc::new(StubLoader {
             rules: vec![CasbinRuleRow {
@@ -175,7 +175,8 @@ mod tests {
         let result = evaluator
             .check(&AuthzCheck {
                 subject_id: user_id,
-                tenant_id,
+                account_id,
+                website_id: None,
                 resource: "orders".into(),
                 action: "read".into(),
                 context: None,
@@ -191,7 +192,8 @@ mod tests {
         let result = evaluator
             .check(&AuthzCheck {
                 subject_id: Uuid::new_v4(),
-                tenant_id: Uuid::new_v4(),
+                account_id: Uuid::new_v4(),
+                website_id: None,
                 resource: "deny-all".into(),
                 action: "read".into(),
                 context: None,

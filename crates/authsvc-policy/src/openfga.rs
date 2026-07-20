@@ -29,7 +29,13 @@ impl PolicyEvaluator for OpenFgaEvaluator {
             "tuple_key": {
                 "user": format!("user:{}", req.subject_id),
                 "relation": req.action,
-                "object": format!("{}:{}", req.resource, req.tenant_id)
+                "object": format!(
+                    "{}:{}",
+                    req.resource,
+                    req.website_id
+                        .map(|id| id.to_string())
+                        .unwrap_or_else(|| req.account_id.to_string())
+                )
             }
         });
 

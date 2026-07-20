@@ -23,7 +23,8 @@ pub struct TokenClaims {
     pub iss: String,
     pub exp: usize,
     pub iat: usize,
-    pub tenant_id: String,
+    pub account_id: String,
+    pub website_id: Option<String>,
     pub scope: Option<String>,
     pub client_id: Option<String>,
 }

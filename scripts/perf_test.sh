@@ -10,10 +10,8 @@ DURATION="${DURATION:-15s}"
 CONCURRENCY="${CONCURRENCY:-50}"
 REQUESTS="${REQUESTS:-5000}"
 
-echo "==> Starting Postgres + Redis (docker-compose)"
-export DOCKER_HOST="${DOCKER_HOST:-unix://${HOME}/.colima/default/docker.sock}"
-docker-compose up -d postgres redis
-docker-compose exec -T postgres sh -c 'until pg_isready -U authsvc; do sleep 1; done'
+echo "==> Starting Postgres + Redis (Homebrew)"
+"$ROOT/scripts/brew_services.sh" up
 
 export DATABASE_URL="${DATABASE_URL:-postgres://authsvc:authsvc@127.0.0.1:5432/authsvc}"
 export REDIS_URL="${REDIS_URL:-redis://127.0.0.1:6379}"

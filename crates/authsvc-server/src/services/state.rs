@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use authsvc_core::{AuthError, NotificationSender};
-use authsvc_core::TenantRepository;
+use authsvc_core::{AccountRepository, AuthError, NotificationSender};
 use authsvc_idp::ProviderRegistry;
 use authsvc_policy::{casbin::CasbinEvaluator, openfga::OpenFgaEvaluator, rbac, CompositeEvaluator, PolicyBackend};
 use authsvc_policy::rbac::RbacEvaluator;
@@ -42,7 +41,7 @@ impl AppState {
         webauthn: Option<Arc<WebAuthnService>>,
     ) -> Result<Self, AuthError> {
         store.migrate().await?;
-        TenantRepository::ensure_default(&store).await?;
+        AccountRepository::ensure_default(&store).await?;
 
         let jwt = JwtKeyStore::load_from_db(
             &store,
@@ -129,7 +128,7 @@ impl AppState {
 
     pub async fn audit(
         &self,
-        tenant_id: Option<Uuid>,
+        account_id: Option<Uuid>,
         actor: Option<&str>,
         action: &str,
         resource: Option<&str>,
@@ -137,7 +136,7 @@ impl AppState {
         metadata: serde_json::Value,
     ) -> Result<(), AuthError> {
         self.store
-            .audit(tenant_id, actor, action, resource, ip, metadata)
+            .audit(account_id, actor, action, resource, ip, metadata)
             .await
     }
 }

@@ -20,12 +20,14 @@ pub struct Config {
     pub session_ttl_secs: u64,
     pub jwt_private_key_pem: Option<String>,
     pub jwt_public_key_pem: Option<String>,
-    #[serde(default = "default_tenant")]
-    pub default_tenant_slug: String,
+    #[serde(default = "default_account")]
+    pub default_account_slug: String,
+    #[serde(default = "default_website")]
+    pub default_website_slug: String,
     pub bootstrap_secret: Option<String>,
     #[serde(default = "default_env")]
     pub env: String,
-    #[serde(default)]
+    #[serde(default, skip)]
     pub allowed_origins: Vec<String>,
     #[serde(default = "default_lockout_max")]
     pub lockout_max_attempts: u32,
@@ -66,7 +68,10 @@ fn default_refresh_ttl() -> u64 {
 fn default_session_ttl() -> u64 {
     86400
 }
-fn default_tenant() -> String {
+fn default_account() -> String {
+    "default".into()
+}
+fn default_website() -> String {
     "default".into()
 }
 fn default_env() -> String {
@@ -95,14 +100,12 @@ impl Config {
             .extract()
             .map_err(|e| anyhow::anyhow!("config error: {e}"))?;
 
-        if cfg.allowed_origins.is_empty() {
-            if let Ok(origins) = std::env::var("ALLOWED_ORIGINS") {
-                cfg.allowed_origins = origins
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-            }
+        if let Ok(origins) = std::env::var("ALLOWED_ORIGINS") {
+            cfg.allowed_origins = origins
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
         }
 
         fn empty_as_none(value: Option<String>) -> Option<String> {

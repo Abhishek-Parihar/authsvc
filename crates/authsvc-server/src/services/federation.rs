@@ -1,4 +1,6 @@
-use authsvc_core::{AuthError, ClientRepository, TenantRepository, UserRepository};
+use authsvc_core::{
+    AccountRepository, AuthError, ClientRepository, MembershipRepository, UserRepository,
+};
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 
@@ -9,9 +11,9 @@ pub async fn start_federation(
     state: &AppState,
     provider: &str,
 ) -> Result<String, AuthError> {
-    let tenant = TenantRepository::find_by_slug(&state.store, &state.config.default_tenant_slug)
+    let account = AccountRepository::find_by_slug(&state.store, &state.config.default_account_slug)
         .await?
-        .ok_or_else(|| AuthError::NotFound("tenant".into()))?;
+        .ok_or_else(|| AuthError::NotFound("account".into()))?;
 
     let idp = state.idp_registry.get(provider)?;
     let federation_state = Uuid::new_v4().to_string();
@@ -19,7 +21,7 @@ pub async fn start_federation(
         .store
         .store_federation_state(
             &federation_state,
-            tenant.id,
+            account.id,
             provider,
             Utc::now() + Duration::minutes(10),
         )
@@ -35,7 +37,7 @@ pub async fn federation_callback(
     code: &str,
     client_id: &str,
 ) -> Result<auth::TokenResponse, AuthError> {
-    let (tenant_id, provider) = state
+    let (account_id, provider) = state
         .store
         .consume_federation_state(state_param)
         .await?
@@ -48,27 +50,29 @@ pub async fn federation_callback(
     let user_id = if let Some(uid) = state.store.find_identity(&provider, &fed.subject).await? {
         uid
     } else if let Some(email) = &fed.email {
-        let user = match state.store.find_by_email(tenant_id, email).await? {
+        let user = match UserRepository::find_by_email(&state.store, email).await? {
             Some(u) => u,
             None => {
                 let pwd = Uuid::new_v4().to_string();
                 let hash = hash_password(&pwd)?;
-                UserRepository::create(
+                let user = UserRepository::create(
                     &state.store,
                     &authsvc_core::user::CreateUser {
-                        tenant_id,
                         email: email.to_lowercase(),
                         password: pwd,
                         display_name: fed.name.clone(),
                     },
                     &hash,
                 )
-                .await?
+                .await?;
+                MembershipRepository::add_account_member(&state.store, account_id, user.id, None)
+                    .await?;
+                user
             }
         };
         state
             .store
-            .link_identity(user.id, tenant_id, &provider, &fed.subject, fed.email.as_deref())
+            .link_identity(user.id, &provider, &fed.subject, fed.email.as_deref())
             .await?;
         user.id
     } else {
@@ -78,15 +82,13 @@ pub async fn federation_callback(
     let user = UserRepository::find_by_id(&state.store, user_id)
         .await?
         .ok_or(AuthError::UserNotFound)?;
-    let client = state
-        .store
-        .find_by_client_id(client_id)
+    let client = ClientRepository::find_by_client_id(&state.store, client_id)
         .await?
         .ok_or(AuthError::ClientNotFound)?;
 
     state
         .audit(
-            Some(tenant_id),
+            Some(account_id),
             Some(&user.id.to_string()),
             "login.federated",
             Some(&provider),
@@ -95,5 +97,5 @@ pub async fn federation_callback(
         )
         .await?;
 
-    auth::issue_user_tokens(state, &user, &client).await
+    auth::complete_login(state, &user, &client).await
 }

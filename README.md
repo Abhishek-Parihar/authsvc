@@ -32,11 +32,25 @@ deploy/kind/           # Local kind cluster values
 scripts/               # perf_test.sh, k8s_local_up.sh, k8s_perf_test.sh
 ```
 
-## Quick start
+## Quick start (Homebrew — default)
+
+Requires [Homebrew](https://brew.sh) Postgres and Redis:
 
 ```bash
+brew install postgresql@18 redis
+make brew-up          # start services + create authsvc DB
 cp .env.example .env
-docker-compose up -d postgres redis
+cargo run -p authsvc-server
+```
+
+Or use the script directly: `./scripts/brew_services.sh up|down|status`
+
+**Connection URLs:** `postgres://authsvc:authsvc@127.0.0.1:5432/authsvc` and `redis://127.0.0.1:6379`
+
+### Optional: Docker Compose
+
+```bash
+docker compose up -d postgres redis
 cargo run -p authsvc-server
 ```
 
@@ -67,7 +81,7 @@ curl -s -X POST http://localhost:8080/oauth/token \
 # 5. Authz check
 curl -s -X POST http://localhost:8080/v1/authz/check \
   -H 'Content-Type: application/json' \
-  -d '{"subject_id":"<user_id>","tenant_id":"<tenant_id>","action":"read","resource":"users"}' | jq
+  -d '{"subject_id":"<user_id>","account_id":"<account_id>","action":"read","resource":"users"}' | jq
 ```
 
 ## Environment

@@ -13,7 +13,7 @@ pub enum AuthContext {
     UserJwt(AccessTokenClaims),
     ApiKey {
         key_id: Uuid,
-        tenant_id: Uuid,
+        account_id: Uuid,
         scopes: Vec<String>,
     },
 }
@@ -43,10 +43,10 @@ pub async fn authenticate(
     }
 
     if let Some(key) = extract_api_key(headers) {
-        let (key_id, tenant_id, scopes) = validate_api_key(state, &key).await?;
+        let (key_id, account_id, scopes) = validate_api_key(state, &key).await?;
         return Ok(AuthContext::ApiKey {
             key_id,
-            tenant_id,
+            account_id,
             scopes,
         });
     }

@@ -55,11 +55,11 @@ fn generate_rsa_keypair() -> Result<(String, String), AuthError> {
 
 pub async fn dispatch_webhook(
     state: &AppState,
-    tenant_id: Uuid,
+    account_id: Uuid,
     event: &str,
     payload: serde_json::Value,
 ) {
-    if let Ok(hooks) = state.store.list_webhooks_for_event(tenant_id, event).await {
+    if let Ok(hooks) = state.store.list_webhooks_for_event(account_id, event).await {
         for (id, url, secret) in hooks {
             let state = state.clone();
             let event = event.to_string();

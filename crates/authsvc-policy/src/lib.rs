@@ -45,9 +45,9 @@ impl CompositeEvaluator {
         }
     }
 
-    pub fn invalidate_casbin(&self, tenant_id: uuid::Uuid) {
+    pub fn invalidate_casbin(&self, account_id: uuid::Uuid) {
         if let Some(c) = &self.casbin {
-            c.invalidate_tenant(tenant_id);
+            c.invalidate_account(account_id);
         }
     }
 }

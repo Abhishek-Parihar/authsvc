@@ -9,6 +9,11 @@ impl NotificationSender for LogNotificationSender {
         tracing::info!(to = %to, subject = %subject, body = %body, "notification (log)");
         Ok(())
     }
+
+    async fn send_sms(&self, to: &str, body: &str) -> Result<(), AuthError> {
+        tracing::info!(to = %to, body = %body, "sms (log)");
+        Ok(())
+    }
 }
 
 pub struct SmtpNotificationSender {
@@ -47,6 +52,12 @@ impl NotificationSender for SmtpNotificationSender {
             .map_err(|e| AuthError::Internal(e.to_string()))?
             .error_for_status()
             .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn send_sms(&self, to: &str, body: &str) -> Result<(), AuthError> {
+        tracing::info!(to = %to, body = %body, "sms (log fallback)");
+        let _ = (to, body);
         Ok(())
     }
 }

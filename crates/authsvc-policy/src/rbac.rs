@@ -8,7 +8,8 @@ pub trait PermissionLoader: Send + Sync {
     async fn list_user_permissions(
         &self,
         user_id: Uuid,
-        tenant_id: Uuid,
+        account_id: Uuid,
+        website_id: Option<Uuid>,
     ) -> Result<Vec<Permission>, AuthError>;
 }
 
@@ -27,7 +28,7 @@ impl PolicyEvaluator for RbacEvaluator {
     async fn check(&self, req: &AuthzCheck) -> Result<AuthzResult, AuthError> {
         let permissions = self
             .loader
-            .list_user_permissions(req.subject_id, req.tenant_id)
+            .list_user_permissions(req.subject_id, req.account_id, req.website_id)
             .await?;
 
         let allowed = permissions.iter().any(|p| {
@@ -63,11 +64,11 @@ mod tests {
         async fn list_user_permissions(
             &self,
             _user_id: Uuid,
-            _tenant_id: Uuid,
+            _account_id: Uuid,
+            _website_id: Option<Uuid>,
         ) -> Result<Vec<Permission>, AuthError> {
             Ok(vec![Permission {
                 id: Uuid::new_v4(),
-                tenant_id: Uuid::new_v4(),
                 resource: "orders".into(),
                 action: "read".into(),
                 description: None,
@@ -78,11 +79,12 @@ mod tests {
     #[tokio::test]
     async fn rbac_allows_matching_permission() {
         let evaluator = RbacEvaluator::new(Arc::new(StubLoader));
-        let tenant_id = Uuid::new_v4();
+        let account_id = Uuid::new_v4();
         let result = evaluator
             .check(&AuthzCheck {
                 subject_id: Uuid::new_v4(),
-                tenant_id,
+                account_id,
+                website_id: None,
                 resource: "orders".into(),
                 action: "read".into(),
                 context: None,
@@ -98,7 +100,8 @@ mod tests {
         let result = evaluator
             .check(&AuthzCheck {
                 subject_id: Uuid::new_v4(),
-                tenant_id: Uuid::new_v4(),
+                account_id: Uuid::new_v4(),
+                website_id: None,
                 resource: "orders".into(),
                 action: "delete".into(),
                 context: None,

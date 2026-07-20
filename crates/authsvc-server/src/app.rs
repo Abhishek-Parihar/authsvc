@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use authsvc_idp::{github::GitHubProvider, google::GoogleProvider, ProviderRegistry};
+use authsvc_idp::{
+    github::GitHubProvider, google::GoogleProvider, microsoft::MicrosoftProvider, ProviderRegistry,
+};
 use axum::{
     middleware as axum_mw,
     routing::{get, post},
@@ -17,19 +19,21 @@ use crate::{
     handlers::{
         admin::{
             add_role_inheritance, assign_user_role, create_api_key_handler, create_casbin_rule,
-            create_permission, create_role, create_tenant, create_webhook, delete_casbin_rule,
-            delete_client, get_tenant, list_casbin_rules, list_clients, remove_role_inheritance,
+            create_permission, create_role, create_account, create_website, create_webhook, delete_casbin_rule,
+            delete_client, get_account, list_casbin_rules, list_clients, remove_role_inheritance,
             revoke_api_key_handler, rotate_keys as admin_rotate_keys,
         },
         auth::{
-            complete_mfa, create_client, magic_link_send, magic_link_verify, mfa_disable, mfa_enroll,
-            mfa_verify, register, revoke, token,
+            complete_mfa, create_client, email_otp_send, email_otp_verify, magic_link_send,
+            magic_link_verify, mfa_disable, mfa_enroll, mfa_verify, phone_otp_send,
+            phone_otp_verify, register, revoke, select_account, token,
         },
         federation::{federate_callback, federate_start},
         health::{health, metrics, ready},
         oidc::{
             authorize, check, introspect, logout, oauth_login, openid_configuration, userinfo, jwks,
         },
+        portal::get_portal_from_map,
         webauthn::{login_begin, login_finish, register_begin, register_finish},
         SharedState,
     },
@@ -66,6 +70,21 @@ pub async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
     ) {
         let redirect = format!("{}/oauth/federate/github/callback", config.issuer);
         if let Ok(p) = GitHubProvider::new(&gh_id, &gh_sec, &redirect) {
+            idp_registry.register(Arc::new(p));
+        }
+    }
+    if let (Ok(ms_id), Ok(ms_sec)) = (
+        std::env::var("MICROSOFT_CLIENT_ID"),
+        std::env::var("MICROSOFT_CLIENT_SECRET"),
+    ) {
+        let redirect = format!("{}/oauth/federate/microsoft/callback", config.issuer);
+        let tenant = std::env::var("MICROSOFT_TENANT").ok();
+        if let Ok(p) = MicrosoftProvider::new(
+            &ms_id,
+            &ms_sec,
+            &redirect,
+            tenant.as_deref(),
+        ) {
             idp_registry.register(Arc::new(p));
         }
     }
@@ -119,8 +138,14 @@ pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometh
         .route("/oauth/login", post(oauth_login))
         .route("/oauth/logout", post(logout))
         .route("/oauth/mfa", post(complete_mfa))
+        .route("/oauth/select-account", post(select_account))
+        .route("/v1/portal", get(get_portal_from_map))
         .route("/v1/auth/magic-link/send", post(magic_link_send))
         .route("/v1/auth/magic-link/verify", get(magic_link_verify))
+        .route("/v1/auth/email-otp/send", post(email_otp_send))
+        .route("/v1/auth/email-otp/verify", post(email_otp_verify))
+        .route("/v1/auth/phone-otp/send", post(phone_otp_send))
+        .route("/v1/auth/phone-otp/verify", post(phone_otp_verify))
         .route("/v1/authz/check", post(check))
         .route("/oauth/federate/{provider}", get(federate_start))
         .route("/oauth/federate/{provider}/callback", get(federate_callback))
@@ -137,8 +162,9 @@ pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometh
     let admin = Router::new()
         .route("/v1/clients", post(create_client).get(list_clients))
         .route("/v1/clients/{id}", axum::routing::delete(delete_client))
-        .route("/v1/tenants", post(create_tenant))
-        .route("/v1/tenants/{id}", get(get_tenant))
+        .route("/v1/accounts", post(create_account))
+        .route("/v1/accounts/{id}", get(get_account))
+        .route("/v1/websites", post(create_website))
         .route("/v1/roles", post(create_role))
         .route(
             "/v1/roles/{child_id}/inherit/{parent_id}",
@@ -150,7 +176,7 @@ pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometh
         .route("/v1/api-keys/{id}", axum::routing::delete(revoke_api_key_handler))
         .route("/v1/casbin/rules", post(create_casbin_rule))
         .route("/v1/casbin/rules/{id}", axum::routing::delete(delete_casbin_rule))
-        .route("/v1/casbin/rules/tenant/{tenant_id}", get(list_casbin_rules))
+        .route("/v1/casbin/rules/account/{account_id}", get(list_casbin_rules))
         .route("/v1/webhooks", post(create_webhook))
         .route("/v1/keys/rotate", post(admin_rotate_keys))
         .route("/v1/mfa/enroll", post(mfa_enroll))

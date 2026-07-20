@@ -11,6 +11,7 @@ pub mod auth;
 pub mod federation;
 pub mod health;
 pub mod oidc;
+pub mod portal;
 pub mod webauthn;
 
 pub struct ApiError(pub AuthError);

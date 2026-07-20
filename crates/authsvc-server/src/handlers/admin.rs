@@ -1,5 +1,5 @@
 use axum::{extract::{Path, State}, Json};
-use authsvc_core::{AuthError, TenantRepository};
+use authsvc_core::{AccountRepository, AuthError, WebsiteRepository};
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
@@ -10,38 +10,64 @@ use crate::{
 };
 
 #[derive(Debug, Deserialize)]
-pub struct CreateTenantRequest {
+pub struct CreateAccountRequest {
     pub slug: String,
     pub name: String,
 }
 
-pub async fn create_tenant(
+pub async fn create_account(
     State(state): State<SharedState>,
-    Json(body): Json<CreateTenantRequest>,
+    Json(body): Json<CreateAccountRequest>,
 ) -> AppResult<impl axum::response::IntoResponse> {
-    let tenant = state.store.create_tenant(&body.slug, &body.name).await?;
-    Ok(Json(json!({"id": tenant.id, "slug": tenant.slug, "name": tenant.name})))
+    let account = state.store.create_account(&body.slug, &body.name).await?;
+    Ok(Json(json!({"id": account.id, "slug": account.slug, "name": account.name})))
 }
 
-pub async fn get_tenant(
+pub async fn get_account(
     State(state): State<SharedState>,
     Path(id): Path<Uuid>,
 ) -> AppResult<impl axum::response::IntoResponse> {
-    let tenant = TenantRepository::find_by_id(&state.store, id)
+    let account = AccountRepository::find_by_id(&state.store, id)
         .await?
-        .ok_or_else(|| ApiError(AuthError::NotFound("tenant".into())))?;
-    Ok(Json(json!({"id": tenant.id, "slug": tenant.slug, "name": tenant.name})))
+        .ok_or_else(|| ApiError(AuthError::NotFound("account".into())))?;
+    Ok(Json(json!({"id": account.id, "slug": account.slug, "name": account.name})))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateWebsiteRequest {
+    pub account_id: String,
+    pub slug: String,
+    pub name: String,
+    pub domain: Option<String>,
+}
+
+pub async fn create_website(
+    State(state): State<SharedState>,
+    Json(body): Json<CreateWebsiteRequest>,
+) -> AppResult<impl axum::response::IntoResponse> {
+    let account_id = Uuid::parse_str(&body.account_id)
+        .map_err(|_| ApiError(AuthError::Validation("invalid account_id".into())))?;
+    let website = state
+        .store
+        .create_website(account_id, &body.slug, &body.name, body.domain.as_deref())
+        .await?;
+    Ok(Json(website))
 }
 
 pub async fn list_clients(
     State(state): State<SharedState>,
 ) -> AppResult<impl axum::response::IntoResponse> {
-    let tenant = state
-        .store
-        .find_by_slug(&state.config.default_tenant_slug)
+    let account = AccountRepository::find_by_slug(&state.store, &state.config.default_account_slug)
         .await?
-        .ok_or_else(|| ApiError(AuthError::NotFound("tenant".into())))?;
-    let clients = state.store.list_clients(tenant.id).await?;
+        .ok_or_else(|| ApiError(AuthError::NotFound("account".into())))?;
+    let website = WebsiteRepository::find_by_slug(
+        &state.store,
+        account.id,
+        &state.config.default_website_slug,
+    )
+    .await?
+    .ok_or_else(|| ApiError(AuthError::NotFound("website".into())))?;
+    let clients = state.store.list_clients(website.id).await?;
     Ok(Json(json!({"clients": clients})))
 }
 
@@ -55,7 +81,7 @@ pub async fn delete_client(
 
 #[derive(Debug, Deserialize)]
 pub struct CreateRoleRequest {
-    pub tenant_id: String,
+    pub account_id: String,
     pub name: String,
     pub description: Option<String>,
 }
@@ -64,18 +90,17 @@ pub async fn create_role(
     State(state): State<SharedState>,
     Json(body): Json<CreateRoleRequest>,
 ) -> AppResult<impl axum::response::IntoResponse> {
-    let tenant_id = Uuid::parse_str(&body.tenant_id)
-        .map_err(|_| ApiError(AuthError::Validation("invalid tenant_id".into())))?;
+    let account_id = Uuid::parse_str(&body.account_id)
+        .map_err(|_| ApiError(AuthError::Validation("invalid account_id".into())))?;
     let role = state
         .store
-        .create_role(tenant_id, &body.name, body.description.as_deref())
+        .create_role(account_id, &body.name, body.description.as_deref())
         .await?;
     Ok(Json(json!({"id": role.id, "name": role.name})))
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreatePermissionRequest {
-    pub tenant_id: String,
     pub resource: String,
     pub action: String,
 }
@@ -84,11 +109,12 @@ pub async fn create_permission(
     State(state): State<SharedState>,
     Json(body): Json<CreatePermissionRequest>,
 ) -> AppResult<impl axum::response::IntoResponse> {
-    let tenant_id = Uuid::parse_str(&body.tenant_id)
-        .map_err(|_| ApiError(AuthError::Validation("invalid tenant_id".into())))?;
+    let account = AccountRepository::find_by_slug(&state.store, &state.config.default_account_slug)
+        .await?
+        .ok_or_else(|| ApiError(AuthError::NotFound("account".into())))?;
     let perm = state
         .store
-        .create_permission(tenant_id, &body.resource, &body.action)
+        .create_permission(account.id, &body.resource, &body.action)
         .await?;
     Ok(Json(json!({"id": perm.id, "resource": perm.resource, "action": perm.action})))
 }
@@ -111,7 +137,7 @@ pub async fn assign_user_role(
 
 #[derive(Debug, Deserialize)]
 pub struct CreateApiKeyRequest {
-    pub tenant_id: String,
+    pub account_id: String,
     pub name: String,
     pub scopes: Vec<String>,
 }
@@ -120,9 +146,9 @@ pub async fn create_api_key_handler(
     State(state): State<SharedState>,
     Json(body): Json<CreateApiKeyRequest>,
 ) -> AppResult<impl axum::response::IntoResponse> {
-    let tenant_id = Uuid::parse_str(&body.tenant_id)
-        .map_err(|_| ApiError(AuthError::Validation("invalid tenant_id".into())))?;
-    let (id, key) = create_api_key(&state, tenant_id, &body.name, body.scopes).await?;
+    let account_id = Uuid::parse_str(&body.account_id)
+        .map_err(|_| ApiError(AuthError::Validation("invalid account_id".into())))?;
+    let (id, key) = create_api_key(&state, account_id, &body.name, body.scopes).await?;
     Ok(Json(json!({"id": id, "api_key": key})))
 }
 
@@ -136,7 +162,7 @@ pub async fn revoke_api_key_handler(
 
 #[derive(Debug, Deserialize)]
 pub struct CreateWebhookRequest {
-    pub tenant_id: String,
+    pub account_id: String,
     pub url: String,
     pub events: Vec<String>,
 }
@@ -145,12 +171,12 @@ pub async fn create_webhook(
     State(state): State<SharedState>,
     Json(body): Json<CreateWebhookRequest>,
 ) -> AppResult<impl axum::response::IntoResponse> {
-    let tenant_id = Uuid::parse_str(&body.tenant_id)
-        .map_err(|_| ApiError(AuthError::Validation("invalid tenant_id".into())))?;
+    let account_id = Uuid::parse_str(&body.account_id)
+        .map_err(|_| ApiError(AuthError::Validation("invalid account_id".into())))?;
     let secret = uuid::Uuid::new_v4().to_string();
     let id = state
         .store
-        .create_webhook(tenant_id, &body.url, &secret, &body.events)
+        .create_webhook(account_id, &body.url, &secret, &body.events)
         .await?;
     Ok(Json(json!({"id": id, "secret": secret})))
 }
@@ -164,7 +190,7 @@ pub async fn rotate_keys(
 
 #[derive(Debug, Deserialize)]
 pub struct CreateCasbinRuleRequest {
-    pub tenant_id: String,
+    pub account_id: String,
     pub ptype: String,
     pub v0: Option<String>,
     pub v1: Option<String>,
@@ -178,12 +204,12 @@ pub async fn create_casbin_rule(
     State(state): State<SharedState>,
     Json(body): Json<CreateCasbinRuleRequest>,
 ) -> AppResult<impl axum::response::IntoResponse> {
-    let tenant_id = Uuid::parse_str(&body.tenant_id)
-        .map_err(|_| ApiError(AuthError::Validation("invalid tenant_id".into())))?;
+    let account_id = Uuid::parse_str(&body.account_id)
+        .map_err(|_| ApiError(AuthError::Validation("invalid account_id".into())))?;
     let id = state
         .store
         .create_casbin_rule(
-            tenant_id,
+            account_id,
             &body.ptype,
             body.v0.as_deref(),
             body.v1.as_deref(),
@@ -193,7 +219,7 @@ pub async fn create_casbin_rule(
             body.v5.as_deref(),
         )
         .await?;
-    state.policy.invalidate_casbin(tenant_id);
+    state.policy.invalidate_casbin(account_id);
     Ok(Json(json!({"id": id})))
 }
 
@@ -207,9 +233,9 @@ pub async fn delete_casbin_rule(
 
 pub async fn list_casbin_rules(
     State(state): State<SharedState>,
-    Path(tenant_id): Path<Uuid>,
+    Path(account_id): Path<Uuid>,
 ) -> AppResult<impl axum::response::IntoResponse> {
-    let rules = state.store.list_casbin_rules(tenant_id).await?;
+    let rules = state.store.list_casbin_rules(account_id).await?;
     Ok(Json(json!({"rules": rules})))
 }
 

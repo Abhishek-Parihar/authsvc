@@ -6,7 +6,7 @@ use crate::crypto::password::{generate_refresh_token, hash_token};
 
 pub async fn create_api_key(
     state: &AppState,
-    tenant_id: Uuid,
+    account_id: Uuid,
     name: &str,
     scopes: Vec<String>,
 ) -> Result<(Uuid, String), AuthError> {
@@ -15,7 +15,7 @@ pub async fn create_api_key(
     let hash = hash_token(&plain);
     let id = state
         .store
-        .create_api_key(tenant_id, name, &prefix, &hash, &scopes, None)
+        .create_api_key(account_id, name, &prefix, &hash, &scopes, None)
         .await?;
     Ok((id, plain))
 }
@@ -30,10 +30,11 @@ pub async fn validate_api_key(state: &AppState, key: &str) -> Result<(Uuid, Uuid
 }
 
 pub async fn api_key_grant(state: &AppState, api_key: &str) -> Result<super::auth::TokenResponse, AuthError> {
-    let (key_id, tenant_id, scopes) = validate_api_key(state, api_key).await?;
+    let (key_id, account_id, scopes) = validate_api_key(state, api_key).await?;
     let (access_token, _) = state.jwt.issue_access_token(
         key_id,
-        tenant_id,
+        account_id,
+        None,
         Some(&format!("apikey:{key_id}")),
         &scopes,
     )?;
@@ -47,6 +48,9 @@ pub async fn api_key_grant(state: &AppState, api_key: &str) -> Result<super::aut
         id_token: None,
         mfa_required: None,
         mfa_challenge_id: None,
+        account_selection_required: None,
+        selection_id: None,
+        accounts: None,
     })
 }
 

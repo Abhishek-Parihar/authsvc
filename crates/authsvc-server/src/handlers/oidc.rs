@@ -5,8 +5,7 @@ use axum::{
     Json,
 };
 use authsvc_core::{
-    AuthError, AuthzCheck, AuthzResult, ClientRepository, SessionStore, TenantRepository,
-    UserRepository,
+    AuthError, AuthzCheck, AuthzResult, ClientRepository, SessionStore, UserRepository,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -57,7 +56,8 @@ pub async fn jwks(State(state): State<SharedState>) -> AppResult<Json<Value>> {
 #[derive(Debug, Deserialize)]
 pub struct AuthzCheckRequest {
     pub subject_id: String,
-    pub tenant_id: String,
+    pub account_id: String,
+    pub website_id: Option<String>,
     pub action: String,
     pub resource: String,
     pub context: Option<serde_json::Value>,
@@ -68,13 +68,19 @@ pub async fn check(
     headers: HeaderMap,
     Json(body): Json<AuthzCheckRequest>,
 ) -> AppResult<Json<AuthzResult>> {
-    let tenant_id = Uuid::parse_str(&body.tenant_id)
-        .map_err(|_| AuthError::Validation("invalid tenant_id".into()))?;
+    let account_id = Uuid::parse_str(&body.account_id)
+        .map_err(|_| AuthError::Validation("invalid account_id".into()))?;
+    let website_id = body
+        .website_id
+        .as_deref()
+        .map(Uuid::parse_str)
+        .transpose()
+        .map_err(|_| AuthError::Validation("invalid website_id".into()))?;
 
-    if let Ok(AuthContext::ApiKey { tenant_id: key_tenant, .. }) =
+    if let Ok(AuthContext::ApiKey { account_id: key_account, .. }) =
         authenticate(&state, &headers).await
     {
-        if key_tenant != tenant_id {
+        if key_account != account_id {
             return Err(ApiError(AuthError::Forbidden));
         }
     }
@@ -82,7 +88,8 @@ pub async fn check(
     let req = AuthzCheck {
         subject_id: Uuid::parse_str(&body.subject_id)
             .map_err(|_| AuthError::Validation("invalid subject_id".into()))?,
-        tenant_id,
+        account_id,
+        website_id,
         action: body.action,
         resource: body.resource,
         context: body.context,
@@ -106,7 +113,8 @@ pub async fn userinfo(
         "email": user.email,
         "email_verified": user.email_verified,
         "name": user.display_name,
-        "tenant_id": user.tenant_id
+        "account_id": claims.account_id,
+        "website_id": claims.website_id
     })))
 }
 
@@ -131,7 +139,8 @@ pub async fn introspect(
             "exp": claims.exp,
             "iat": claims.iat,
             "iss": claims.iss,
-            "tenant_id": claims.tenant_id
+            "account_id": claims.account_id,
+            "website_id": claims.website_id
         }))),
         Err(_) => Ok(Json(json!({ "active": false }))),
     }
@@ -218,13 +227,7 @@ pub async fn oauth_login(
         .ok_or(ApiError(AuthError::InvalidToken))?;
 
     let (client_id, redirect_uri, code_challenge, scopes) = login;
-    let tenant = TenantRepository::find_by_slug(&state.store, &state.config.default_tenant_slug)
-        .await?
-        .ok_or_else(|| ApiError(AuthError::NotFound("tenant".into())))?;
-
-    let user = state
-        .store
-        .find_by_email(tenant.id, &body.email.to_lowercase())
+    let user = UserRepository::find_by_email(&state.store, &body.email.to_lowercase())
         .await?
         .ok_or(ApiError(AuthError::InvalidCredentials))?;
 

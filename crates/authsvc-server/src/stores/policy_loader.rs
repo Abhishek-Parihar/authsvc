@@ -10,8 +10,9 @@ impl PermissionLoader for PostgresStore {
     async fn list_user_permissions(
         &self,
         user_id: Uuid,
-        tenant_id: Uuid,
+        account_id: Uuid,
+        website_id: Option<Uuid>,
     ) -> Result<Vec<Permission>, AuthError> {
-        self.list_user_permissions(user_id, tenant_id).await
+        self.list_user_permissions(user_id, account_id, website_id).await
     }
 }

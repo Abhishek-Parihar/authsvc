@@ -1,5 +1,6 @@
 pub mod github;
 pub mod google;
+pub mod microsoft;
 pub mod oidc;
 pub mod registry;
 

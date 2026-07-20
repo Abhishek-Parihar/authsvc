@@ -1,4 +1,4 @@
-use authsvc_core::{AuthError, Permission, Role, Tenant};
+use authsvc_core::{account::Account, AccountOption, AuthError, Permission, PortalInfo, Role};
 use chrono::{DateTime, Utc};
 use sqlx::Row;
 use uuid::Uuid;
@@ -6,17 +6,17 @@ use uuid::Uuid;
 use super::PostgresStore;
 
 impl PostgresStore {
-    // --- Tenants ---
-    pub async fn create_tenant(&self, slug: &str, name: &str) -> Result<Tenant, AuthError> {
+    // --- Accounts ---
+    pub async fn create_account(&self, slug: &str, name: &str) -> Result<Account, AuthError> {
         let id = Uuid::new_v4();
-        sqlx::query("INSERT INTO tenants (id, slug, name) VALUES ($1, $2, $3)")
+        sqlx::query("INSERT INTO accounts (id, slug, name) VALUES ($1, $2, $3)")
             .bind(id)
             .bind(slug)
             .bind(name)
             .execute(self.pool())
             .await
             .map_err(|e| AuthError::Internal(e.to_string()))?;
-        Ok(Tenant {
+        Ok(Account {
             id,
             slug: slug.to_string(),
             name: name.to_string(),
@@ -24,12 +24,44 @@ impl PostgresStore {
         })
     }
 
-    // --- OAuth clients list/delete ---
-    pub async fn list_clients(&self, tenant_id: Uuid) -> Result<Vec<serde_json::Value>, AuthError> {
-        let rows = sqlx::query(
-            "SELECT id, client_id, name, grant_types, scopes, created_at FROM oauth_clients WHERE tenant_id = $1",
+    pub async fn create_website(
+        &self,
+        account_id: Uuid,
+        slug: &str,
+        name: &str,
+        domain: Option<&str>,
+    ) -> Result<serde_json::Value, AuthError> {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            "INSERT INTO websites (id, account_id, slug, name, domain, created_at) VALUES ($1,$2,$3,$4,$5,$6)",
         )
-        .bind(tenant_id)
+        .bind(id)
+        .bind(account_id)
+        .bind(slug)
+        .bind(name)
+        .bind(domain)
+        .bind(now)
+        .execute(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(serde_json::json!({
+            "id": id,
+            "account_id": account_id,
+            "slug": slug,
+            "name": name,
+            "domain": domain,
+            "created_at": now,
+        }))
+    }
+
+    // --- OAuth clients list/delete ---
+    pub async fn list_clients(&self, website_id: Uuid) -> Result<Vec<serde_json::Value>, AuthError> {
+        let rows = sqlx::query(
+            "SELECT id, client_id, name, client_type, grant_types, scopes, created_at
+             FROM oauth_clients WHERE website_id = $1",
+        )
+        .bind(website_id)
         .fetch_all(self.pool())
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
@@ -60,17 +92,17 @@ impl PostgresStore {
     // --- Roles / permissions CRUD ---
     pub async fn create_role(
         &self,
-        tenant_id: Uuid,
+        account_id: Uuid,
         name: &str,
         description: Option<&str>,
     ) -> Result<Role, AuthError> {
         let id = Uuid::new_v4();
         let now = Utc::now();
         sqlx::query(
-            "INSERT INTO roles (id, tenant_id, name, description, created_at) VALUES ($1,$2,$3,$4,$5)",
+            "INSERT INTO roles (id, account_id, scope, name, description, created_at) VALUES ($1,$2,'account',$3,$4,$5)",
         )
         .bind(id)
-        .bind(tenant_id)
+        .bind(account_id)
         .bind(name)
         .bind(description)
         .bind(now)
@@ -79,7 +111,9 @@ impl PostgresStore {
         .map_err(|e| AuthError::Internal(e.to_string()))?;
         Ok(Role {
             id,
-            tenant_id,
+            account_id,
+            website_id: None,
+            scope: authsvc_core::RoleScope::Account,
             name: name.to_string(),
             description: description.map(str::to_string),
             created_at: now,
@@ -88,16 +122,15 @@ impl PostgresStore {
 
     pub async fn create_permission(
         &self,
-        tenant_id: Uuid,
+        _account_id: Uuid,
         resource: &str,
         action: &str,
     ) -> Result<Permission, AuthError> {
         let id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO permissions (id, tenant_id, resource, action) VALUES ($1,$2,$3,$4)",
+            "INSERT INTO permissions (id, resource, action) VALUES ($1,$2,$3)",
         )
         .bind(id)
-        .bind(tenant_id)
         .bind(resource)
         .bind(action)
         .execute(self.pool())
@@ -105,7 +138,6 @@ impl PostgresStore {
         .map_err(|e| AuthError::Internal(e.to_string()))?;
         Ok(Permission {
             id,
-            tenant_id,
             resource: resource.to_string(),
             action: action.to_string(),
             description: None,
@@ -165,7 +197,7 @@ impl PostgresStore {
     #[allow(clippy::too_many_arguments)]
     pub async fn create_casbin_rule(
         &self,
-        tenant_id: Uuid,
+        account_id: Uuid,
         ptype: &str,
         v0: Option<&str>,
         v1: Option<&str>,
@@ -175,10 +207,10 @@ impl PostgresStore {
         v5: Option<&str>,
     ) -> Result<i32, AuthError> {
         let row = sqlx::query(
-            "INSERT INTO casbin_rules (tenant_id, ptype, v0, v1, v2, v3, v4, v5)
+            "INSERT INTO casbin_rules (account_id, ptype, v0, v1, v2, v3, v4, v5)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
         )
-        .bind(tenant_id)
+        .bind(account_id)
         .bind(ptype)
         .bind(v0)
         .bind(v1)
@@ -203,13 +235,13 @@ impl PostgresStore {
 
     pub async fn list_casbin_rules(
         &self,
-        tenant_id: Uuid,
+        account_id: Uuid,
     ) -> Result<Vec<(i32, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)>, AuthError>
     {
         let rows = sqlx::query(
-            "SELECT id, ptype, v0, v1, v2, v3, v4, v5 FROM casbin_rules WHERE tenant_id = $1 ORDER BY id",
+            "SELECT id, ptype, v0, v1, v2, v3, v4, v5 FROM casbin_rules WHERE account_id = $1 ORDER BY id",
         )
-        .bind(tenant_id)
+        .bind(account_id)
         .fetch_all(self.pool())
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
@@ -423,12 +455,11 @@ impl PostgresStore {
     }
 
     // --- Magic links ---
-    pub async fn store_magic_link(&self, hash: &str, tenant_id: Uuid, email: &str, expires: DateTime<Utc>) -> Result<(), AuthError> {
+    pub async fn store_magic_link(&self, hash: &str, email: &str, expires: DateTime<Utc>) -> Result<(), AuthError> {
         sqlx::query(
-            "INSERT INTO magic_link_tokens (token_hash, tenant_id, email, expires_at) VALUES ($1,$2,$3,$4)",
+            "INSERT INTO magic_link_tokens (token_hash, email, expires_at) VALUES ($1,$2,$3)",
         )
         .bind(hash)
-        .bind(tenant_id)
         .bind(email)
         .bind(expires)
         .execute(self.pool())
@@ -437,9 +468,9 @@ impl PostgresStore {
         Ok(())
     }
 
-    pub async fn consume_magic_link(&self, hash: &str) -> Result<Option<(Uuid, String)>, AuthError> {
+    pub async fn consume_magic_link(&self, hash: &str) -> Result<Option<String>, AuthError> {
         let row = sqlx::query(
-            "SELECT tenant_id, email, expires_at, used FROM magic_link_tokens WHERE token_hash = $1",
+            "SELECT email, expires_at, used FROM magic_link_tokens WHERE token_hash = $1",
         )
         .bind(hash)
         .fetch_optional(self.pool())
@@ -456,25 +487,23 @@ impl PostgresStore {
             .execute(self.pool())
             .await
             .map_err(|e| AuthError::Internal(e.to_string()))?;
-        Ok(Some((r.get("tenant_id"), r.get("email"))))
+        Ok(Some(r.get("email")))
     }
 
     // --- Federation ---
     pub async fn link_identity(
         &self,
         user_id: Uuid,
-        tenant_id: Uuid,
         provider: &str,
         subject: &str,
         email: Option<&str>,
     ) -> Result<(), AuthError> {
         sqlx::query(
-            "INSERT INTO user_identities (id, user_id, tenant_id, provider, provider_subject, email)
-             VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (provider, provider_subject) DO NOTHING",
+            "INSERT INTO user_identities (id, user_id, provider, provider_subject, email)
+             VALUES ($1,$2,$3,$4,$5) ON CONFLICT (provider, provider_subject) DO NOTHING",
         )
         .bind(Uuid::new_v4())
         .bind(user_id)
-        .bind(tenant_id)
         .bind(provider)
         .bind(subject)
         .bind(email)
@@ -494,12 +523,12 @@ impl PostgresStore {
         Ok(row.map(|r| r.get("user_id")))
     }
 
-    pub async fn store_federation_state(&self, state: &str, tenant_id: Uuid, provider: &str, expires: DateTime<Utc>) -> Result<(), AuthError> {
+    pub async fn store_federation_state(&self, state: &str, account_id: Uuid, provider: &str, expires: DateTime<Utc>) -> Result<(), AuthError> {
         sqlx::query(
-            "INSERT INTO federation_states (state, tenant_id, provider, expires_at) VALUES ($1,$2,$3,$4)",
+            "INSERT INTO federation_states (state, account_id, provider, expires_at) VALUES ($1,$2,$3,$4)",
         )
         .bind(state)
-        .bind(tenant_id)
+        .bind(account_id)
         .bind(provider)
         .bind(expires)
         .execute(self.pool())
@@ -509,7 +538,7 @@ impl PostgresStore {
     }
 
     pub async fn consume_federation_state(&self, state: &str) -> Result<Option<(Uuid, String)>, AuthError> {
-        let row = sqlx::query("SELECT tenant_id, provider, expires_at FROM federation_states WHERE state = $1")
+        let row = sqlx::query("SELECT account_id, provider, expires_at FROM federation_states WHERE state = $1")
             .bind(state)
             .fetch_optional(self.pool())
             .await
@@ -525,13 +554,13 @@ impl PostgresStore {
             .execute(self.pool())
             .await
             .map_err(|e| AuthError::Internal(e.to_string()))?;
-        Ok(Some((r.get("tenant_id"), r.get("provider"))))
+        Ok(Some((r.get("account_id"), r.get("provider"))))
     }
 
     // --- API keys ---
     pub async fn create_api_key(
         &self,
-        tenant_id: Uuid,
+        account_id: Uuid,
         name: &str,
         prefix: &str,
         hash: &str,
@@ -540,10 +569,10 @@ impl PostgresStore {
     ) -> Result<Uuid, AuthError> {
         let id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, scopes, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+            "INSERT INTO api_keys (id, account_id, name, key_prefix, key_hash, scopes, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
         )
         .bind(id)
-        .bind(tenant_id)
+        .bind(account_id)
         .bind(name)
         .bind(prefix)
         .bind(hash)
@@ -557,7 +586,7 @@ impl PostgresStore {
 
     pub async fn find_api_key(&self, hash: &str) -> Result<Option<(Uuid, Uuid, Vec<String>)>, AuthError> {
         let row = sqlx::query(
-            "SELECT id, tenant_id, scopes, expires_at, revoked FROM api_keys WHERE key_hash = $1",
+            "SELECT id, account_id, scopes, expires_at, revoked FROM api_keys WHERE key_hash = $1",
         )
         .bind(hash)
         .fetch_optional(self.pool())
@@ -574,7 +603,7 @@ impl PostgresStore {
                 return Ok(None);
             }
         }
-        Ok(Some((r.get("id"), r.get("tenant_id"), r.get("scopes"))))
+        Ok(Some((r.get("id"), r.get("account_id"), r.get("scopes"))))
     }
 
     pub async fn revoke_api_key(&self, id: Uuid) -> Result<(), AuthError> {
@@ -589,7 +618,7 @@ impl PostgresStore {
     // --- Audit + webhooks ---
     pub async fn audit(
         &self,
-        tenant_id: Option<Uuid>,
+        account_id: Option<Uuid>,
         actor: Option<&str>,
         action: &str,
         resource: Option<&str>,
@@ -597,10 +626,10 @@ impl PostgresStore {
         metadata: serde_json::Value,
     ) -> Result<(), AuthError> {
         sqlx::query(
-            "INSERT INTO audit_events (id, tenant_id, actor_id, action, resource, ip_address, metadata) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+            "INSERT INTO audit_events (id, account_id, actor_id, action, resource, ip_address, metadata) VALUES ($1,$2,$3,$4,$5,$6,$7)",
         )
         .bind(Uuid::new_v4())
-        .bind(tenant_id)
+        .bind(account_id)
         .bind(actor)
         .bind(action)
         .bind(resource)
@@ -612,13 +641,13 @@ impl PostgresStore {
         Ok(())
     }
 
-    pub async fn create_webhook(&self, tenant_id: Uuid, url: &str, secret: &str, events: &[String]) -> Result<Uuid, AuthError> {
+    pub async fn create_webhook(&self, account_id: Uuid, url: &str, secret: &str, events: &[String]) -> Result<Uuid, AuthError> {
         let id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO webhooks (id, tenant_id, url, secret, events) VALUES ($1,$2,$3,$4,$5)",
+            "INSERT INTO webhooks (id, account_id, url, secret, events) VALUES ($1,$2,$3,$4,$5)",
         )
         .bind(id)
-        .bind(tenant_id)
+        .bind(account_id)
         .bind(url)
         .bind(secret)
         .bind(events)
@@ -628,11 +657,11 @@ impl PostgresStore {
         Ok(id)
     }
 
-    pub async fn list_webhooks_for_event(&self, tenant_id: Uuid, event: &str) -> Result<Vec<(Uuid, String, String)>, AuthError> {
+    pub async fn list_webhooks_for_event(&self, account_id: Uuid, event: &str) -> Result<Vec<(Uuid, String, String)>, AuthError> {
         let rows = sqlx::query(
-            "SELECT id, url, secret FROM webhooks WHERE tenant_id = $1 AND enabled = TRUE AND $2 = ANY(events)",
+            "SELECT id, url, secret FROM webhooks WHERE account_id = $1 AND enabled = TRUE AND $2 = ANY(events)",
         )
-        .bind(tenant_id)
+        .bind(account_id)
         .bind(event)
         .fetch_all(self.pool())
         .await
@@ -782,6 +811,179 @@ impl PostgresStore {
             .execute(self.pool())
             .await
             .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    // --- Portal / login selection ---
+    pub async fn find_portal_by_domain(&self, domain: &str) -> Result<Option<PortalInfo>, AuthError> {
+        let row = sqlx::query(
+            "SELECT w.id AS website_id, w.account_id, w.slug AS website_slug, w.name AS website_name,
+                    w.domain, w.portal_name, w.logo_url, w.portal_type,
+                    a.slug AS account_slug, a.name AS account_name
+             FROM websites w
+             JOIN accounts a ON a.id = w.account_id
+             WHERE LOWER(w.domain) = LOWER($1)
+             LIMIT 1",
+        )
+        .bind(domain)
+        .fetch_optional(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+
+        Ok(row.map(|r| PortalInfo {
+            account_id: r.get("account_id"),
+            account_slug: r.get("account_slug"),
+            account_name: r.get("account_name"),
+            website_id: r.get("website_id"),
+            website_slug: r.get("website_slug"),
+            website_name: r.get("website_name"),
+            domain: r.get("domain"),
+            portal_name: r.get("portal_name"),
+            logo_url: r.get("logo_url"),
+            portal_type: r.get("portal_type"),
+        }))
+    }
+
+    pub async fn list_user_account_options(
+        &self,
+        user_id: Uuid,
+    ) -> Result<Vec<AccountOption>, AuthError> {
+        let rows = sqlx::query(
+            "SELECT a.id AS account_id, a.slug, a.name, am.status
+             FROM account_members am
+             JOIN accounts a ON a.id = am.account_id
+             WHERE am.user_id = $1
+             ORDER BY a.name",
+        )
+        .bind(user_id)
+        .fetch_all(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| AccountOption {
+                account_id: r.get("account_id"),
+                slug: r.get("slug"),
+                name: r.get("name"),
+                status: r.get("status"),
+            })
+            .collect())
+    }
+
+    // --- Email OTP ---
+    pub async fn store_email_otp(
+        &self,
+        email: &str,
+        code_hash: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<(), AuthError> {
+        sqlx::query(
+            "INSERT INTO email_otp_codes (id, email, code_hash, expires_at) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(email)
+        .bind(code_hash)
+        .bind(expires_at)
+        .execute(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn consume_email_otp(&self, email: &str, code_hash: &str) -> Result<bool, AuthError> {
+        let row = sqlx::query(
+            "SELECT id, expires_at, used FROM email_otp_codes
+             WHERE LOWER(email) = LOWER($1) AND code_hash = $2
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(email)
+        .bind(code_hash)
+        .fetch_optional(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+
+        let Some(r) = row else {
+            return Ok(false);
+        };
+        if r.get::<bool, _>("used") || r.get::<DateTime<Utc>, _>("expires_at") < Utc::now() {
+            return Ok(false);
+        }
+        sqlx::query("UPDATE email_otp_codes SET used = TRUE WHERE id = $1")
+            .bind(r.get::<Uuid, _>("id"))
+            .execute(self.pool())
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(true)
+    }
+
+    // --- Phone OTP ---
+    pub async fn store_phone_otp(
+        &self,
+        phone: &str,
+        code_hash: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<(), AuthError> {
+        sqlx::query(
+            "INSERT INTO phone_otp_codes (id, phone, code_hash, expires_at) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(phone)
+        .bind(code_hash)
+        .bind(expires_at)
+        .execute(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn consume_phone_otp(&self, phone: &str, code_hash: &str) -> Result<bool, AuthError> {
+        let row = sqlx::query(
+            "SELECT id, expires_at, used FROM phone_otp_codes
+             WHERE phone = $1 AND code_hash = $2
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(phone)
+        .bind(code_hash)
+        .fetch_optional(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+
+        let Some(r) = row else {
+            return Ok(false);
+        };
+        if r.get::<bool, _>("used") || r.get::<DateTime<Utc>, _>("expires_at") < Utc::now() {
+            return Ok(false);
+        }
+        sqlx::query("UPDATE phone_otp_codes SET used = TRUE WHERE id = $1")
+            .bind(r.get::<Uuid, _>("id"))
+            .execute(self.pool())
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(true)
+    }
+
+    pub async fn find_user_id_by_phone(&self, phone: &str) -> Result<Option<Uuid>, AuthError> {
+        let row = sqlx::query(
+            "SELECT user_id FROM user_phones WHERE phone = $1 AND verified = TRUE",
+        )
+        .bind(phone)
+        .fetch_optional(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(row.map(|r| r.get("user_id")))
+    }
+
+    pub async fn link_verified_phone(&self, user_id: Uuid, phone: &str) -> Result<(), AuthError> {
+        sqlx::query(
+            "INSERT INTO user_phones (user_id, phone, verified) VALUES ($1, $2, TRUE)
+             ON CONFLICT (phone) DO UPDATE SET user_id = $1, verified = TRUE",
+        )
+        .bind(user_id)
+        .bind(phone)
+        .execute(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
         Ok(())
     }
 }

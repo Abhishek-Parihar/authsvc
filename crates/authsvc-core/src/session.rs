@@ -6,9 +6,8 @@ use uuid::Uuid;
 pub struct Session {
     pub id: Uuid,
     pub user_id: Uuid,
-    pub tenant_id: Uuid,
-    pub user_agent: Option<String>,
-    pub ip_address: Option<String>,
-    pub expires_at: DateTime<Utc>,
+    pub account_id: Option<Uuid>,
+    pub website_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
 }
