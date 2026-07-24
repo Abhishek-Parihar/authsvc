@@ -4,6 +4,10 @@ pub mod microsoft;
 pub mod oidc;
 pub mod registry;
 pub mod saml;
+pub mod saml_authn_request;
+pub mod saml_idp;
+mod saml_encryption;
+mod saml_signature;
 
 use async_trait::async_trait;
 use authsvc_core::AuthError;

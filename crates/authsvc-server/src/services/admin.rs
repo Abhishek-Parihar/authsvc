@@ -107,6 +107,7 @@ pub async fn create_webhook(
     url: &str,
     events: Vec<String>,
 ) -> Result<(Uuid, String), AuthError> {
+    crate::security::webhook_url::validate_webhook_url(url, state.config.is_production())?;
     let secret = Uuid::new_v4().to_string();
     let encrypted_secret =
         crate::crypto::secrets::encrypt_string(&state.data_keys, "webhook_secret", &secret).await?;

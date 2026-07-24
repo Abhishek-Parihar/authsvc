@@ -1,0 +1,20 @@
+# cargo-audit policy — see https://docs.rs/cargo-audit/latest/cargo_audit/config/
+#
+# Revisit ignored advisories on each release. Track upstream fixes:
+# - xml-sec → quick-xml >=0.41
+# - oauth2/openidconnect → rustls-webpki >=0.103
+
+[advisories]
+ignore = [
+    # RSA timing side-channel (Marvin). No fixed rsa crate release; monitor upstream.
+    "RUSTSEC-2023-0071",
+    # testcontainers dev-dependency only; no fixed tokio-tar release.
+    "RUSTSEC-2025-0111",
+    # xml-sec 0.1.8 pins quick-xml 0.38.4; authsvc-idp also depends on quick-xml 0.41.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+    # oauth2 v4 / openidconnect v3 → reqwest 0.11 → rustls 0.21 → rustls-webpki 0.101.
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+]

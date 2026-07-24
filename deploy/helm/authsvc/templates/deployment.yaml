@@ -17,9 +17,11 @@ spec:
       {{- if .Values.migration.enabled }}
       initContainers:
         - name: migrate
-          image: "{{ .Values.migration.image }}:{{ .Values.migration.tag }}"
-          args: ["-path", "/migrations", "-database", "$(DATABASE_URL)", "up"]
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            - name: MIGRATE_ONLY
+              value: "true"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -38,6 +40,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "authsvc.fullname" . }}
                   key: database-url
+            {{- if .Values.secrets.databaseMigratorUrl }}
+            - name: DATABASE_MIGRATOR_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "authsvc.fullname" . }}
+                  key: database-migrator-url
+            {{- end }}
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:
@@ -78,12 +87,21 @@ spec:
                   name: {{ include "authsvc.fullname" . }}
                   key: data-encryption-key
             {{- end }}
+            {{- if .Values.secrets.metricsBearerToken }}
+            - name: METRICS_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "authsvc.fullname" . }}
+                  key: metrics-bearer-token
+            {{- end }}
             {{- if .Values.env.DATABASE_MAX_CONNECTIONS }}
             - name: DATABASE_MAX_CONNECTIONS
               value: {{ .Values.env.DATABASE_MAX_CONNECTIONS | quote }}
             {{- end }}
             - name: ENV
               value: {{ .Values.env.ENV | quote }}
+            - name: MIGRATE_ON_START
+              value: {{ .Values.env.MIGRATE_ON_START | default "false" | quote }}
             - name: ISSUER
               value: {{ .Values.env.ISSUER | default .Values.env.AUTHSVC_ISSUER | quote }}
             - name: POLICY_BACKEND
@@ -100,13 +118,69 @@ spec:
               value: {{ .Values.env.PORT | default .Values.env.AUTHSVC_PORT | default "8080" | quote }}
             - name: HOST
               value: "0.0.0.0"
+            {{- if .Values.env.JWT_KMS_HTTP_URL }}
+            - name: JWT_KMS_HTTP_URL
+              value: {{ .Values.env.JWT_KMS_HTTP_URL | quote }}
+            {{- end }}
+            {{- if .Values.env.JWT_KMS_KEY_ID }}
+            - name: JWT_KMS_KEY_ID
+              value: {{ .Values.env.JWT_KMS_KEY_ID | quote }}
+            {{- end }}
+            {{- if .Values.env.KMS_HTTP_URL }}
+            - name: KMS_HTTP_URL
+              value: {{ .Values.env.KMS_HTTP_URL | quote }}
+            {{- end }}
+            {{- if .Values.env.OTEL_ENDPOINT }}
+            - name: OTEL_ENDPOINT
+              value: {{ .Values.env.OTEL_ENDPOINT | quote }}
+            {{- end }}
+            {{- if .Values.env.AUDIT_EXPORT_WEBHOOK }}
+            - name: AUDIT_EXPORT_WEBHOOK
+              value: {{ .Values.env.AUDIT_EXPORT_WEBHOOK | quote }}
+            {{- end }}
+            {{- if .Values.env.ALLOWED_ORIGINS }}
+            - name: ALLOWED_ORIGINS
+              value: {{ .Values.env.ALLOWED_ORIGINS | quote }}
+            {{- end }}
+            {{- if .Values.env.DATABASE_READ_URL }}
+            - name: DATABASE_READ_URL
+              value: {{ .Values.env.DATABASE_READ_URL | quote }}
+            {{- end }}
+            {{- if .Values.env.WEBAUTHN_RP_ID }}
+            - name: WEBAUTHN_RP_ID
+              value: {{ .Values.env.WEBAUTHN_RP_ID | quote }}
+            {{- end }}
+            {{- if .Values.env.AUDIT_RETENTION_DAYS }}
+            - name: AUDIT_RETENTION_DAYS
+              value: {{ .Values.env.AUDIT_RETENTION_DAYS | quote }}
+            {{- end }}
+            {{- if .Values.env.DSAR_ARTIFACT_RETENTION_DAYS }}
+            - name: DSAR_ARTIFACT_RETENTION_DAYS
+              value: {{ .Values.env.DSAR_ARTIFACT_RETENTION_DAYS | quote }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: {{ .Values.livenessProbe.path }}
               port: {{ .Values.livenessProbe.port }}
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
           readinessProbe:
             httpGet:
               path: {{ .Values.readinessProbe.path }}
               port: {{ .Values.readinessProbe.port }}
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault

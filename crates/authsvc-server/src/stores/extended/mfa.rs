@@ -6,7 +6,13 @@ use uuid::Uuid;
 use super::super::PostgresStore;
 
 impl PostgresStore {
-    pub async fn store_mfa_secret(&self, user_id: Uuid, encrypted: &str, recovery_hashes: &[String]) -> Result<(), AuthError> {
+    pub async fn store_mfa_secret(
+        &self,
+        user_id: Uuid,
+        encrypted: &str,
+        recovery_hashes: &[String],
+        enable: bool,
+    ) -> Result<(), AuthError> {
         sqlx::query(
             "INSERT INTO user_mfa_secrets (user_id, encrypted_secret, recovery_codes_hash)
              VALUES ($1,$2,$3) ON CONFLICT (user_id) DO UPDATE SET encrypted_secret = $2, recovery_codes_hash = $3",
@@ -17,12 +23,54 @@ impl PostgresStore {
         .execute(self.pool())
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
+        if enable {
+            sqlx::query("UPDATE users SET mfa_enabled = TRUE WHERE id = $1")
+                .bind(user_id)
+                .execute(self.pool())
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    pub async fn enable_mfa(&self, user_id: Uuid) -> Result<(), AuthError> {
         sqlx::query("UPDATE users SET mfa_enabled = TRUE WHERE id = $1")
             .bind(user_id)
             .execute(self.pool())
             .await
             .map_err(|e| AuthError::Internal(e.to_string()))?;
         Ok(())
+    }
+
+    pub async fn consume_recovery_code(
+        &self,
+        user_id: Uuid,
+        code_hash: &str,
+    ) -> Result<bool, AuthError> {
+        let row = sqlx::query(
+            "SELECT recovery_codes_hash FROM user_mfa_secrets WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let Some(r) = row else {
+            return Ok(false);
+        };
+        let hashes: Vec<String> = r.get("recovery_codes_hash");
+        if !hashes.iter().any(|h| h == code_hash) {
+            return Ok(false);
+        }
+        let remaining: Vec<String> = hashes.into_iter().filter(|h| h != code_hash).collect();
+        sqlx::query(
+            "UPDATE user_mfa_secrets SET recovery_codes_hash = $2 WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .bind(&remaining)
+        .execute(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(true)
     }
 
     pub async fn get_mfa_secret(&self, user_id: Uuid) -> Result<Option<String>, AuthError> {

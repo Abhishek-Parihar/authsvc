@@ -1,4 +1,5 @@
 pub mod casbin_loader;
+pub mod cached_permissions;
 pub mod extended;
 pub mod policy_loader;
 pub mod postgres;

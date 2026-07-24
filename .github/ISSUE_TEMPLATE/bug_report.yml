@@ -1,0 +1,61 @@
+name: Bug report
+description: Report something that isn't working as documented
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please search [existing issues](https://github.com/Abhishek-Parihar/authsvc/issues) first.
+
+        **Do not use this form for security vulnerabilities** — see [SECURITY.md](https://github.com/Abhishek-Parihar/authsvc/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Clear description of the bug and expected behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps, config, or curl commands.
+      placeholder: |
+        1. Set ENV=...
+        2. POST /oauth/token with ...
+        3. See error ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: authsvc version or commit
+      placeholder: v0.3.0 or git sha
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - OAuth / OIDC
+        - MFA / WebAuthn
+        - Federation (OIDC / SAML)
+        - Authorization (RBAC / Casbin)
+        - SCIM
+        - Deployment / Helm
+        - SDK (Go / TS / Python / Rust)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or errors
+      render: shell

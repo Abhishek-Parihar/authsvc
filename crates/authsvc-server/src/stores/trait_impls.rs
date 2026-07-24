@@ -53,8 +53,22 @@ impl MfaStore for PostgresStore {
         user_id: Uuid,
         encrypted: &str,
         recovery_hashes: &[String],
+        enable: bool,
     ) -> Result<(), AuthError> {
-        self.store_mfa_secret(user_id, encrypted, recovery_hashes).await
+        self.store_mfa_secret(user_id, encrypted, recovery_hashes, enable)
+            .await
+    }
+
+    async fn enable_mfa(&self, user_id: Uuid) -> Result<(), AuthError> {
+        self.enable_mfa(user_id).await
+    }
+
+    async fn consume_recovery_code(
+        &self,
+        user_id: Uuid,
+        code_hash: &str,
+    ) -> Result<bool, AuthError> {
+        self.consume_recovery_code(user_id, code_hash).await
     }
 
     async fn get_mfa_secret(&self, user_id: Uuid) -> Result<Option<String>, AuthError> {
@@ -211,13 +225,16 @@ impl SigningKeyStore for PostgresStore {
     async fn store_signing_key(
         &self,
         kid: &str,
-        private_pem: &str,
         public_pem: &str,
+        encrypted_private_pem: Option<&str>,
     ) -> Result<(), AuthError> {
-        self.store_signing_key(kid, private_pem, public_pem).await
+        self.store_signing_key(kid, public_pem, encrypted_private_pem)
+            .await
     }
 
-    async fn get_active_signing_key(&self) -> Result<Option<(String, String, String)>, AuthError> {
+    async fn get_active_signing_key(
+        &self,
+    ) -> Result<Option<(String, String, Option<String>)>, AuthError> {
         self.get_active_signing_key().await
     }
 
@@ -464,9 +481,10 @@ impl PrivacyStore for PostgresStore {
     async fn complete_export_request(
         &self,
         id: Uuid,
+        account_id: Uuid,
         artifact: &serde_json::Value,
     ) -> Result<(), AuthError> {
-        self.complete_export_request(id, artifact).await
+        self.complete_export_request(id, account_id, artifact).await
     }
 
     async fn list_user_identities(&self, user_id: Uuid) -> Result<Vec<serde_json::Value>, AuthError> {
@@ -479,6 +497,10 @@ impl PrivacyStore for PostgresStore {
         limit: i64,
     ) -> Result<Vec<serde_json::Value>, AuthError> {
         self.list_user_audit_events(user_id, limit).await
+    }
+
+    async fn complete_erasure(&self, user_id: Uuid, account_ids: &[Uuid]) -> Result<(), AuthError> {
+        self.complete_erasure(user_id, account_ids).await
     }
 }
 

@@ -182,7 +182,14 @@ pub trait MfaStore: Send + Sync {
         user_id: Uuid,
         encrypted: &str,
         recovery_hashes: &[String],
+        enable: bool,
     ) -> Result<(), AuthError>;
+    async fn enable_mfa(&self, user_id: Uuid) -> Result<(), AuthError>;
+    async fn consume_recovery_code(
+        &self,
+        user_id: Uuid,
+        code_hash: &str,
+    ) -> Result<bool, AuthError>;
     async fn get_mfa_secret(&self, user_id: Uuid) -> Result<Option<String>, AuthError>;
     async fn store_mfa_challenge(
         &self,
@@ -272,13 +279,17 @@ pub trait PortalStore: Send + Sync {
 
 #[async_trait]
 pub trait SigningKeyStore: Send + Sync {
+    /// Persist public key metadata; private key stored encrypted (never plaintext).
     async fn store_signing_key(
         &self,
         kid: &str,
-        private_pem: &str,
         public_pem: &str,
+        encrypted_private_pem: Option<&str>,
     ) -> Result<(), AuthError>;
-    async fn get_active_signing_key(&self) -> Result<Option<(String, String, String)>, AuthError>;
+    /// Returns (kid, public_pem, encrypted_private_pem).
+    async fn get_active_signing_key(
+        &self,
+    ) -> Result<Option<(String, String, Option<String>)>, AuthError>;
     async fn list_signing_keys_for_jwks(
         &self,
         grace_secs: u64,
@@ -461,6 +472,7 @@ pub trait PrivacyStore: Send + Sync {
     async fn complete_export_request(
         &self,
         id: Uuid,
+        account_id: Uuid,
         artifact: &serde_json::Value,
     ) -> Result<(), AuthError>;
     async fn list_user_identities(&self, user_id: Uuid) -> Result<Vec<serde_json::Value>, AuthError>;
@@ -469,6 +481,7 @@ pub trait PrivacyStore: Send + Sync {
         user_id: Uuid,
         limit: i64,
     ) -> Result<Vec<serde_json::Value>, AuthError>;
+    async fn complete_erasure(&self, user_id: Uuid, account_ids: &[Uuid]) -> Result<(), AuthError>;
 }
 
 #[async_trait]

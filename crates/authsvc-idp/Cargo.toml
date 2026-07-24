@@ -5,14 +5,32 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+default = ["encryption"]
+encryption = ["dep:aes", "dep:cbc", "dep:rsa"]
+
 [dependencies]
 async-trait.workspace = true
 authsvc-core = { path = "../authsvc-core" }
 base64.workspace = true
+chrono.workspace = true
+flate2 = "1"
 oauth2.workspace = true
 openidconnect.workspace = true
+rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 url = "2"
+uuid.workspace = true
+quick-xml.workspace = true
+xml-sec = { version = "0.1.8", default-features = false, features = ["xmldsig", "c14n", "xmlenc"] }
+x509-parser = "0.16"
+aes = { version = "0.8", optional = true }
+cbc = { version = "0.1", optional = true }
+rsa = { workspace = true, optional = true }
+
+[dev-dependencies]
+rsa.workspace = true

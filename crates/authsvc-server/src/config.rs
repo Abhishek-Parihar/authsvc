@@ -38,6 +38,8 @@ pub struct Config {
     pub mfa_encryption_key: Option<String>,
     pub data_encryption_key: Option<String>,
     pub kms_http_url: Option<String>,
+    pub jwt_kms_http_url: Option<String>,
+    pub jwt_kms_key_id: Option<String>,
     #[serde(default)]
     pub disable_password_grant: bool,
     #[serde(default = "default_database_max_connections")]
@@ -62,6 +64,14 @@ pub struct Config {
     pub microsoft_client_id: Option<String>,
     pub microsoft_client_secret: Option<String>,
     pub microsoft_tenant: Option<String>,
+    #[serde(default = "default_audit_retention_days")]
+    pub audit_retention_days: u64,
+    #[serde(default = "default_dsar_artifact_retention_days")]
+    pub dsar_artifact_retention_days: u64,
+    #[serde(default = "default_migrate_on_start")]
+    pub migrate_on_start: bool,
+    pub database_migrator_url: Option<String>,
+    pub metrics_bearer_token: Option<String>,
 }
 
 fn default_host() -> String {
@@ -115,6 +125,15 @@ fn default_database_max_connections() -> u32 {
 fn default_deployment_mode() -> String {
     "self_hosted".into()
 }
+fn default_audit_retention_days() -> u64 {
+    365
+}
+fn default_dsar_artifact_retention_days() -> u64 {
+    30
+}
+fn default_migrate_on_start() -> bool {
+    true
+}
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
@@ -140,6 +159,8 @@ impl Config {
         cfg.mfa_encryption_key = empty_as_none(cfg.mfa_encryption_key);
         cfg.data_encryption_key = empty_as_none(cfg.data_encryption_key);
         cfg.kms_http_url = empty_as_none(cfg.kms_http_url);
+        cfg.jwt_kms_http_url = empty_as_none(cfg.jwt_kms_http_url);
+        cfg.jwt_kms_key_id = empty_as_none(cfg.jwt_kms_key_id);
         cfg.database_read_url = empty_as_none(cfg.database_read_url);
         cfg.audit_export_webhook = empty_as_none(cfg.audit_export_webhook);
         cfg.openfga_url = empty_as_none(cfg.openfga_url);
@@ -152,13 +173,28 @@ impl Config {
         cfg.microsoft_client_id = empty_as_none(cfg.microsoft_client_id);
         cfg.microsoft_client_secret = empty_as_none(cfg.microsoft_client_secret);
         cfg.microsoft_tenant = empty_as_none(cfg.microsoft_tenant);
+        cfg.database_migrator_url = empty_as_none(cfg.database_migrator_url);
+        cfg.metrics_bearer_token = empty_as_none(cfg.metrics_bearer_token);
 
         if cfg.env == "production" {
-            if cfg.jwt_private_key_pem.is_none() || cfg.jwt_public_key_pem.is_none() {
-                anyhow::bail!("JWT_PRIVATE_KEY_PEM and JWT_PUBLIC_KEY_PEM required in production");
+            if cfg.jwt_public_key_pem.is_none() {
+                anyhow::bail!("JWT_PUBLIC_KEY_PEM required in production");
+            }
+            if cfg.jwt_kms_http_url.is_none()
+                && (cfg.jwt_private_key_pem.is_none() || cfg.jwt_public_key_pem.is_none())
+            {
+                anyhow::bail!(
+                    "JWT_PRIVATE_KEY_PEM and JWT_PUBLIC_KEY_PEM required in production (or JWT_KMS_HTTP_URL with JWT_PUBLIC_KEY_PEM)"
+                );
             }
             if cfg.data_encryption_key.is_none() && cfg.mfa_encryption_key.is_none() {
                 anyhow::bail!("DATA_ENCRYPTION_KEY or MFA_ENCRYPTION_KEY required in production");
+            }
+            if cfg.allowed_origins.is_empty() {
+                anyhow::bail!("ALLOWED_ORIGINS required in production");
+            }
+            if cfg.metrics_bearer_token.is_none() {
+                anyhow::bail!("METRICS_BEARER_TOKEN required in production");
             }
             if !cfg.cookie_secure {
                 cfg.cookie_secure = true;

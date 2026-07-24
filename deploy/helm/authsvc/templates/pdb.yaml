@@ -7,5 +7,5 @@ spec:
   minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "authsvc.name" . }}
+      app.kubernetes.io/name: authsvc
 {{- end }}

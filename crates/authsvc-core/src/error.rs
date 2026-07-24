@@ -24,6 +24,10 @@ pub enum AuthError {
     Forbidden,
     #[error("validation error: {0}")]
     Validation(String),
+    #[error("authorization pending")]
+    AuthorizationPending,
+    #[error("slow down")]
+    SlowDown,
     #[error("not found: {0}")]
     NotFound(String),
     #[error("internal error: {0}")]

@@ -251,3 +251,259 @@ paths:
       summary: Begin WebAuthn login
       responses:
         "200": { description: Request challenge }
+  /v1/webauthn/register/finish:
+    post:
+      summary: Complete WebAuthn registration
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: Credential registered }
+  /v1/webauthn/login/finish:
+    post:
+      summary: Complete WebAuthn login
+      responses:
+        "200":
+          description: Token response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+  /oauth/revoke:
+    post:
+      summary: Revoke refresh token
+      responses:
+        "200": { description: Revoked }
+  /oauth/mfa:
+    post:
+      summary: Complete MFA login (TOTP or recovery code)
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+  /oauth/select-account:
+    post:
+      summary: Select account after multi-account login
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+  /v1/portal:
+    get:
+      summary: Portal branding metadata
+      responses:
+        "200": { description: Portal config }
+  /v1/mfa/verify:
+    post:
+      summary: Verify TOTP enrollment
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: MFA enabled }
+  /v1/mfa/disable:
+    post:
+      summary: Disable MFA
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: MFA disabled }
+  /v1/users/{id}/export:
+    get:
+      summary: DSAR data export (self or admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: User data bundle }
+  /v1/users/{id}/privacy:
+    delete:
+      summary: DSAR erasure (self or admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: User erased }
+  /v1/users/{id}/sessions:
+    get:
+      summary: List user sessions (self or admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Session list }
+  /v1/sessions/{id}:
+    delete:
+      summary: Revoke session (self or admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Session revoked }
+  /v1/compliance/status:
+    get:
+      summary: Compliance posture (admin)
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: Compliance status }
+  /v1/scim-tokens:
+    post:
+      summary: Create SCIM bearer token (admin)
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: Token created }
+  /v1/webhooks:
+    post:
+      summary: Register webhook (admin)
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: Webhook created }
+  /v1/idp-configs:
+    get:
+      summary: List IdP configs (admin)
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: IdP config list }
+  /v1/idp-configs/{provider}:
+    post:
+      summary: Upsert IdP config (admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: provider, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Config saved }
+    delete:
+      summary: Delete IdP config (admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: provider, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+  /saml/metadata:
+    get:
+      summary: SAML SP metadata
+      responses:
+        "200": { description: XML metadata }
+  /saml/login:
+    get:
+      summary: Start SAML SP-initiated SSO
+      responses:
+        "302": { description: Redirect to IdP }
+  /saml/acs:
+    post:
+      summary: SAML assertion consumer
+      responses:
+        "200": { description: Login complete }
+  /scim/v2/Users:
+    get:
+      summary: List SCIM users
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: SCIM list response }
+    post:
+      summary: Provision SCIM user
+      security:
+        - BearerAuth: []
+      responses:
+        "201": { description: User created }
+  /scim/v2/Users/{id}:
+    get:
+      summary: Get SCIM user
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: SCIM user }
+    delete:
+      summary: Deprovision SCIM user
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+  /scim/v2/Groups:
+    get:
+      summary: List SCIM groups (roles)
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: SCIM group list }
+  /v1/accounts:
+    post:
+      summary: Create account (admin)
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: Account created }
+  /v1/accounts/{id}:
+    get:
+      summary: Get account (admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Account }
+  /v1/websites:
+    post:
+      summary: Create website (admin)
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: Website created }
+  /v1/roles:
+    post:
+      summary: Create role (admin)
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: Role created }
+  /v1/permissions:
+    post:
+      summary: Create permission (admin)
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: Permission created }
+  /v1/users/{id}/roles:
+    post:
+      summary: Assign role to user (admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Assigned }
+  /v1/api-keys/{id}:
+    delete:
+      summary: Revoke API key (admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Revoked }
+  /v1/clients/{id}:
+    delete:
+      summary: Delete OAuth client (admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Deleted }

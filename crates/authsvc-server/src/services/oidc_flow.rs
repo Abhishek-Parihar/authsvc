@@ -26,11 +26,11 @@ pub async fn start_authorization(
         .await?
         .ok_or(AuthError::ClientNotFound)?;
 
-    if !client.redirect_uris.is_empty()
-        && !client.redirect_uris.contains(&params.redirect_uri)
-    {
-        return Err(AuthError::Validation("invalid redirect_uri".into()));
-    }
+    crate::security::redirect_uri::validate_redirect_uri(
+        &client,
+        &params.redirect_uri,
+        state.config.is_production(),
+    )?;
 
     let login_state = Uuid::new_v4().to_string();
     state
@@ -51,20 +51,35 @@ pub async fn start_authorization(
 
 pub async fn userinfo(state: &AppState, claims: &AccessTokenClaims) -> Result<Value, AuthError> {
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AuthError::InvalidToken)?;
-    let user = state
-        .repos
-        .users()
-        .find_by_id(user_id)
-        .await?
-        .ok_or(AuthError::UserNotFound)?;
+    let user = super::cache_layer::cached_user(state, user_id).await?;
+    let display_name = resolve_display_name(state, &user, claims).await?;
     Ok(json!({
         "sub": user.id,
         "email": user.email,
         "email_verified": user.email_verified,
-        "name": user.display_name,
+        "name": display_name,
         "account_id": claims.account_id,
         "website_id": claims.website_id
     }))
+}
+
+async fn resolve_display_name(
+    state: &AppState,
+    user: &authsvc_core::User,
+    claims: &AccessTokenClaims,
+) -> Result<Option<String>, AuthError> {
+    if let Some(wid) = claims
+        .website_id
+        .as_ref()
+        .and_then(|s| Uuid::parse_str(s).ok())
+    {
+        if let Some((name, _, _)) = state.repos.postgres().get_user_profile(user.id, wid).await? {
+            if name.is_some() {
+                return Ok(name);
+            }
+        }
+    }
+    Ok(user.display_name.clone())
 }
 
 #[derive(Debug, Serialize)]
@@ -221,10 +236,11 @@ pub async fn create_authorization_redirect(
         .await?
         .ok_or(AuthError::ClientNotFound)?;
 
-    if !client.redirect_uris.is_empty() && !client.redirect_uris.contains(&redirect_uri.to_string())
-    {
-        return Err(AuthError::Validation("invalid redirect_uri".into()));
-    }
+    crate::security::redirect_uri::validate_redirect_uri(
+        &client,
+        redirect_uri,
+        state.config.is_production(),
+    )?;
 
     let code = generate_refresh_token();
     state

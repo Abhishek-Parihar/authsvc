@@ -81,3 +81,32 @@ pub async fn list_groups(
     let account_id = scim_account(&state, &headers).await?;
     Ok(Json(scim::list_groups(&state, account_id).await?))
 }
+
+pub async fn get_group(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    let account_id = scim_account(&state, &headers).await?;
+    Ok(Json(scim::get_group(&state, account_id, id).await?))
+}
+
+pub async fn patch_user(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<scim::ScimPatchRequest>,
+) -> AppResult<impl IntoResponse> {
+    let account_id = scim_account(&state, &headers).await?;
+    Ok(Json(scim::patch_user(&state, account_id, id, body).await?))
+}
+
+pub async fn patch_group(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<scim::ScimPatchRequest>,
+) -> AppResult<impl IntoResponse> {
+    let account_id = scim_account(&state, &headers).await?;
+    Ok(Json(scim::patch_group(&state, account_id, id, body).await?))
+}

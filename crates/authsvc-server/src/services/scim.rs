@@ -89,6 +89,161 @@ pub async fn delete_user(state: &AppState, account_id: Uuid, user_id: Uuid) -> R
     super::privacy::delete_user(state, user_id, account_id).await
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct ScimPatchRequest {
+    #[serde(default)]
+    pub Operations: Vec<ScimPatchOperation>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ScimPatchOperation {
+    pub op: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub value: Option<serde_json::Value>,
+}
+
+pub async fn patch_user(
+    state: &AppState,
+    account_id: Uuid,
+    user_id: Uuid,
+    patch: ScimPatchRequest,
+) -> Result<Value, AuthError> {
+    for operation in patch.Operations {
+        let op = operation.op.to_ascii_lowercase();
+        if op != "replace" && op != "add" {
+            return Err(AuthError::Validation(format!(
+                "unsupported SCIM patch op: {}",
+                operation.op
+            )));
+        }
+
+        match operation.path.as_deref() {
+            Some("displayName") => {
+                let name = operation
+                    .value
+                    .as_ref()
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                state
+                    .repos
+                    .postgres()
+                    .update_scim_user_display_name(account_id, user_id, name.as_deref())
+                    .await?;
+            }
+            Some("active") => {
+                let active = operation
+                    .value
+                    .as_ref()
+                    .and_then(|v| v.as_bool())
+                    .ok_or_else(|| AuthError::Validation("active must be a boolean".into()))?;
+                state
+                    .repos
+                    .postgres()
+                    .set_scim_user_active(account_id, user_id, active)
+                    .await?;
+            }
+            Some(path) => {
+                return Err(AuthError::Validation(format!(
+                    "unsupported SCIM patch path: {path}"
+                )));
+            }
+            None => {
+                if let Some(obj) = operation.value.and_then(|v| v.as_object().cloned()) {
+                    if let Some(name) = obj.get("displayName").and_then(|v| v.as_str()) {
+                        state
+                            .repos
+                            .postgres()
+                            .update_scim_user_display_name(account_id, user_id, Some(name))
+                            .await?;
+                    }
+                    if let Some(active) = obj.get("active").and_then(|v| v.as_bool()) {
+                        state
+                            .repos
+                            .postgres()
+                            .set_scim_user_active(account_id, user_id, active)
+                            .await?;
+                    }
+                }
+            }
+        }
+    }
+
+    get_user(state, account_id, user_id).await
+}
+
+pub async fn get_group(state: &AppState, account_id: Uuid, group_id: Uuid) -> Result<Value, AuthError> {
+    state
+        .repos
+        .postgres()
+        .get_scim_group(account_id, group_id)
+        .await?
+        .ok_or(AuthError::NotFound("group".into()))
+}
+
+pub async fn patch_group(
+    state: &AppState,
+    account_id: Uuid,
+    group_id: Uuid,
+    patch: ScimPatchRequest,
+) -> Result<Value, AuthError> {
+    for operation in patch.Operations {
+        let op = operation.op.to_ascii_lowercase();
+        if op != "add" && op != "remove" {
+            return Err(AuthError::Validation(format!(
+                "unsupported SCIM group patch op: {}",
+                operation.op
+            )));
+        }
+
+        let members = match operation.path.as_deref() {
+            Some("members") => operation
+                .value
+                .as_ref()
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default(),
+            Some(path) if path.starts_with("members") => operation
+                .value
+                .as_ref()
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default(),
+            _ => {
+                return Err(AuthError::Validation(
+                    "group patch only supports members path".into(),
+                ));
+            }
+        };
+
+        for member in members {
+            let user_id = member
+                .get("value")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AuthError::Validation("member value required".into()))?;
+            let user_id = Uuid::parse_str(user_id)
+                .map_err(|_| AuthError::Validation("invalid member user id".into()))?;
+
+            if op == "add" {
+                state
+                    .repos
+                    .postgres()
+                    .add_scim_group_member(account_id, group_id, user_id)
+                    .await?;
+            } else {
+                state
+                    .repos
+                    .postgres()
+                    .remove_scim_group_member(account_id, group_id, user_id)
+                    .await?;
+            }
+        }
+    }
+
+    get_group(state, account_id, group_id).await
+}
+
 fn scim_user_resource(user: &authsvc_core::User, account_id: Uuid) -> Result<Value, AuthError> {
     Ok(json!({
         "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],

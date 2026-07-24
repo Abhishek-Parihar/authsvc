@@ -37,7 +37,7 @@ pub async fn federate_callback(
     Query(q): Query<FederateCallbackQuery>,
 ) -> AppResult<impl axum::response::IntoResponse> {
     let _ = provider;
-    let tokens = federation_callback(&state, &q.state, &q.code, &q.client_id).await?;
+    let tokens = federation_callback(&state, &q.state, &q.code, &q.client_id, None).await?;
     Ok(axum::Json(tokens))
 }
 
@@ -56,6 +56,6 @@ pub async fn federate_callback_post(
     let client_id = body
         .get("client_id")
         .ok_or_else(|| ApiError(AuthError::Validation("client_id required".into())))?;
-    let tokens = federation_callback(&state, state_param, code, client_id).await?;
+    let tokens = federation_callback(&state, state_param, code, client_id, None).await?;
     Ok(axum::Json(tokens))
 }

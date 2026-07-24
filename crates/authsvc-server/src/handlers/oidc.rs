@@ -1,7 +1,7 @@
 use axum::{
     extract::{Query, State},
     http::HeaderMap,
-    response::IntoResponse,
+    response::{IntoResponse, Redirect},
     Json,
 };
 use authsvc_core::{AuthError, AuthzCheck, AuthzResult, SessionStore};
@@ -30,13 +30,16 @@ pub async fn openid_configuration(
         "revocation_endpoint": format!("{issuer}/oauth/revoke"),
         "introspection_endpoint": format!("{issuer}/oauth/introspect"),
         "userinfo_endpoint": format!("{issuer}/oauth/userinfo"),
+        "end_session_endpoint": format!("{issuer}/oauth/logout"),
+        "device_authorization_endpoint": format!("{issuer}/oauth/device_authorization"),
         "response_types_supported": ["code"],
         "grant_types_supported": [
             "authorization_code",
             "client_credentials",
             "password",
             "refresh_token",
-            "api_key"
+            "api_key",
+            "urn:ietf:params:oauth:grant-type:device_code"
         ],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
@@ -180,11 +183,10 @@ pub async fn authorize(
     )
     .await?;
 
-    Ok(Json(json!({
-        "login_required": true,
-        "login_state": login_state,
-        "message": "POST credentials to /oauth/login with login_state"
-    })))
+    Ok(Redirect::temporary(&format!(
+        "{}/login?login_state={}",
+        state.config.issuer, login_state
+    )))
 }
 
 #[derive(Debug, Deserialize)]
@@ -239,10 +241,70 @@ pub async fn oauth_login(
     }
 }
 
-pub async fn logout(
+#[derive(Debug, Deserialize)]
+pub struct EndSessionQuery {
+    pub id_token_hint: Option<String>,
+    pub post_logout_redirect_uri: Option<String>,
+    pub state: Option<String>,
+    pub client_id: Option<String>,
+}
+
+pub async fn logout_get(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    query: Query<EndSessionQuery>,
+) -> AppResult<impl axum::response::IntoResponse> {
+    end_session(&state, &headers, Some(query.0)).await
+}
+
+pub async fn logout_post(
     State(state): State<SharedState>,
     headers: HeaderMap,
 ) -> AppResult<impl axum::response::IntoResponse> {
+    end_session(&state, &headers, None).await
+}
+
+async fn end_session(
+    state: &SharedState,
+    headers: &HeaderMap,
+    query: Option<EndSessionQuery>,
+) -> AppResult<impl axum::response::IntoResponse> {
+    clear_session_cookie(state, headers).await?;
+
+    if let Some(q) = query {
+        if let Some(redirect_uri) = q.post_logout_redirect_uri {
+            if let Some(client_id) = q.client_id.as_deref() {
+                let client = state
+                    .repos
+                    .clients()
+                    .find_by_client_id(client_id)
+                    .await?
+                    .ok_or(AuthError::ClientNotFound)?;
+                crate::security::redirect_uri::validate_redirect_uri(
+                    &client,
+                    &redirect_uri,
+                    state.config.is_production(),
+                )?;
+            } else if let Some(hint) = &q.id_token_hint {
+                let _ = state.jwt.validate_id_token(hint)?;
+            }
+
+            let mut target = redirect_uri;
+            if let Some(st) = q.state {
+                let sep = if target.contains('?') { '&' } else { '?' };
+                target = format!("{target}{sep}state={st}");
+            }
+            return Ok(Redirect::temporary(&target).into_response());
+        }
+    }
+
+    Ok(axum::http::StatusCode::NO_CONTENT.into_response())
+}
+
+async fn clear_session_cookie(
+    state: &SharedState,
+    headers: &HeaderMap,
+) -> Result<(), AuthError> {
     if let Some(cookie) = headers.get(axum::http::header::COOKIE).and_then(|v| v.to_str().ok()) {
         for part in cookie.split(';') {
             let part = part.trim();
@@ -253,5 +315,5 @@ pub async fn logout(
             }
         }
     }
-    Ok(axum::http::StatusCode::NO_CONTENT)
+    Ok(())
 }

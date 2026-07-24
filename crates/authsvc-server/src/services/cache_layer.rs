@@ -4,7 +4,30 @@ use uuid::Uuid;
 use super::state::AppState;
 
 const CLIENT_TTL: u64 = 300;
+const USER_TTL: u64 = 60;
 const JWKS_TTL: u64 = 60;
+
+pub async fn cached_user(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<authsvc_core::User, AuthError> {
+    let key = format!("cache:user:{user_id}");
+    if let Some(user) = state
+        .sessions
+        .get_json::<authsvc_core::User>(&key)
+        .await?
+    {
+        return Ok(user);
+    }
+    let user = state
+        .repos
+        .users()
+        .find_by_id(user_id)
+        .await?
+        .ok_or(AuthError::UserNotFound)?;
+    state.sessions.set_json(&key, &user, USER_TTL).await?;
+    Ok(user)
+}
 
 pub async fn cached_client(
     state: &AppState,

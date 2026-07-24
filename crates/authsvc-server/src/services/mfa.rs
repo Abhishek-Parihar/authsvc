@@ -30,13 +30,40 @@ pub async fn enroll_totp(state: &AppState, user_id: Uuid) -> Result<(String, Vec
     state
         .repos
         .mfa()
-        .store_mfa_secret(user_id, &encrypted, &recovery_hashes)
+        .store_mfa_secret(user_id, &encrypted, &recovery_hashes, false)
         .await?;
 
     let url = format!(
         "otpauth://totp/authsvc:{user_id}?secret={encoded}&issuer=authsvc&algorithm=SHA1&digits=6&period=30"
     );
     Ok((url, recovery))
+}
+
+pub async fn verify_totp_and_enable(
+    state: &AppState,
+    user_id: Uuid,
+    code: &str,
+) -> Result<(), AuthError> {
+    verify_totp(state, user_id, code).await?;
+    state.repos.mfa().enable_mfa(user_id).await
+}
+
+pub async fn verify_recovery_code(
+    state: &AppState,
+    user_id: Uuid,
+    code: &str,
+) -> Result<(), AuthError> {
+    let hash = hash_token(code);
+    let ok = state
+        .repos
+        .mfa()
+        .consume_recovery_code(user_id, &hash)
+        .await?;
+    if ok {
+        Ok(())
+    } else {
+        Err(AuthError::InvalidCredentials)
+    }
 }
 
 pub async fn verify_totp(state: &AppState, user_id: Uuid, code: &str) -> Result<(), AuthError> {

@@ -40,25 +40,36 @@ use uuid::Uuid;
 
 pub async fn set_account_context(
     State(state): State<SharedState>,
-    req: Request<Body>,
+    mut req: Request<Body>,
     next: Next,
 ) -> Response<Body> {
+    let mut account_id: Option<Uuid> = None;
+
     if let Some(hdr) = req
         .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
     {
         if let Some(token) = hdr.strip_prefix("Bearer ") {
-            if let Ok(claims) = crate::services::auth::validate_bearer_token(&state, token).await {
-                if let Ok(account_id) = Uuid::parse_str(&claims.account_id) {
-                    let _ = state
-                        .repos
-                        .postgres()
-                        .set_account_context(account_id)
-                        .await;
-                }
+            if state
+                .config
+                .bootstrap_secret
+                .as_deref()
+                .is_some_and(|secret| token == secret)
+            {
+                account_id = crate::services::admin::default_account_id(&state).await.ok();
+            } else if let Ok(claims) =
+                crate::services::auth::validate_bearer_token(&state, token).await
+            {
+                account_id = Uuid::parse_str(&claims.account_id).ok().filter(|id| *id != Uuid::nil());
             }
         }
     }
+
+    if let Some(aid) = account_id {
+        let _ = state.repos.postgres().set_account_context(aid).await;
+        req.extensions_mut().insert(aid);
+    }
+
     next.run(req).await
 }

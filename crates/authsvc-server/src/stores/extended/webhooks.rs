@@ -14,6 +14,18 @@ impl PostgresStore {
         ip: Option<&str>,
         metadata: serde_json::Value,
     ) -> Result<(), AuthError> {
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        if let Some(account_id) = account_id {
+            sqlx::query("SELECT set_config('app.account_id', $1, true)")
+                .bind(account_id.to_string())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?;
+        }
         sqlx::query(
             "INSERT INTO audit_events (id, account_id, actor_id, action, resource, ip_address, metadata) VALUES ($1,$2,$3,$4,$5,$6,$7)",
         )
@@ -24,14 +36,27 @@ impl PostgresStore {
         .bind(resource)
         .bind(ip)
         .bind(metadata)
-        .execute(self.pool())
+        .execute(&mut *tx)
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
         Ok(())
     }
 
     pub async fn create_webhook(&self, account_id: Uuid, url: &str, secret: &str, events: &[String]) -> Result<Uuid, AuthError> {
         let id = Uuid::new_v4();
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        sqlx::query("SELECT set_config('app.account_id', $1, true)")
+            .bind(account_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
         sqlx::query(
             "INSERT INTO webhooks (id, account_id, url, secret, events) VALUES ($1,$2,$3,$4,$5)",
         )
@@ -40,21 +65,37 @@ impl PostgresStore {
         .bind(url)
         .bind(secret)
         .bind(events)
-        .execute(self.pool())
+        .execute(&mut *tx)
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
         Ok(id)
     }
 
     pub async fn list_webhooks_for_event(&self, account_id: Uuid, event: &str) -> Result<Vec<(Uuid, String, String)>, AuthError> {
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        sqlx::query("SELECT set_config('app.account_id', $1, true)")
+            .bind(account_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
         let rows = sqlx::query(
             "SELECT id, url, secret FROM webhooks WHERE account_id = $1 AND enabled = TRUE AND $2 = ANY(events)",
         )
         .bind(account_id)
         .bind(event)
-        .fetch_all(self.pool())
+        .fetch_all(&mut *tx)
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
         Ok(rows
             .into_iter()
             .map(|r| (r.get("id"), r.get("url"), r.get("secret")))

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerabilities
+    url: https://github.com/Abhishek-Parihar/authsvc/security/advisories/new
+    about: Report security issues privately — do not open public issues
+  - name: Documentation
+    url: https://github.com/Abhishek-Parihar/authsvc/blob/main/docs/README.md
+    about: Read the documentation index

@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, Extension, Json};
 use serde_json::json;
 
 use crate::handlers::{AppResult, SharedState};
@@ -22,7 +22,7 @@ pub async fn ready(State(state): State<SharedState>) -> AppResult<impl axum::res
 }
 
 pub async fn metrics(
-    handle: metrics_exporter_prometheus::PrometheusHandle,
+    Extension(handle): Extension<metrics_exporter_prometheus::PrometheusHandle>,
 ) -> impl axum::response::IntoResponse {
     (
         [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],

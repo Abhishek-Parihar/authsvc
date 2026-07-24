@@ -1,0 +1,19 @@
+DROP POLICY IF EXISTS api_keys_tenant ON api_keys;
+ALTER TABLE api_keys NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE api_keys DISABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS webhooks_tenant ON webhooks;
+ALTER TABLE webhooks NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE webhooks DISABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS scim_tokens_tenant ON scim_tokens;
+ALTER TABLE scim_tokens NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE scim_tokens DISABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS data_export_requests_tenant ON data_export_requests;
+ALTER TABLE data_export_requests NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE data_export_requests DISABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS account_idp_configs_tenant ON account_idp_configs;
+ALTER TABLE account_idp_configs NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE account_idp_configs DISABLE ROW LEVEL SECURITY;

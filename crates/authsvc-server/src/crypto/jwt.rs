@@ -1,14 +1,15 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use authsvc_core::{AuthError, SigningKeyStore, User};
-use jsonwebtoken::{
-    decode, decode_header, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation,
-};
+use authsvc_core::{AuthError, DataKeyStore, SigningKeyStore, User};
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use rsa::pkcs8::{DecodePublicKey, EncodePrivateKey, EncodePublicKey};
 use rsa::RsaPrivateKey;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use super::jwt_signer::{encode_rs256_jwt, JwtSigningBackend};
+use super::signing_keys::{decrypt_private_pem, encrypt_private_pem, ensure_signing_key};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessTokenClaims {
@@ -48,7 +49,7 @@ struct VerifyKey {
 
 struct KeySet {
     active_kid: String,
-    active_encoding: EncodingKey,
+    active_signer: JwtSigningBackend,
     verify_keys: HashMap<String, VerifyKey>,
 }
 
@@ -58,29 +59,66 @@ pub struct JwtKeyStore {
     issuer: String,
     access_ttl_secs: u64,
     grace_secs: u64,
+    env_private_pem: Option<String>,
+    jwt_kms_http_url: Option<String>,
+    jwt_kms_key_id: Option<String>,
 }
 
 impl JwtKeyStore {
-    pub async fn load_from_db(
+    pub async fn load(
         store: &dyn SigningKeyStore,
+        data_keys: &Arc<dyn DataKeyStore>,
         issuer: &str,
         access_ttl_secs: u64,
         grace_secs: u64,
         env_private_pem: Option<String>,
         env_public_pem: Option<String>,
+        jwt_kms_http_url: Option<String>,
+        jwt_kms_key_id: Option<String>,
+        allow_ephemeral: bool,
     ) -> Result<Self, AuthError> {
-        ensure_signing_key_in_db(store, env_private_pem, env_public_pem).await?;
-        let key_set = build_key_set(store, grace_secs).await?;
+        ensure_signing_key(
+            store,
+            data_keys,
+            env_private_pem.clone(),
+            env_public_pem,
+            allow_ephemeral,
+        )
+        .await?;
+        let key_set = build_key_set(
+            store,
+            data_keys,
+            grace_secs,
+            env_private_pem.as_deref(),
+            jwt_kms_http_url.as_deref(),
+            jwt_kms_key_id.as_deref(),
+        )
+        .await?;
         Ok(Self {
             inner: Arc::new(RwLock::new(key_set)),
             issuer: issuer.to_string(),
             access_ttl_secs,
             grace_secs,
+            env_private_pem,
+            jwt_kms_http_url,
+            jwt_kms_key_id,
         })
     }
 
-    pub async fn reload(&self, store: &dyn SigningKeyStore) -> Result<(), AuthError> {
-        let key_set = build_key_set(store, self.grace_secs).await?;
+    pub async fn reload(
+        &self,
+        store: &dyn SigningKeyStore,
+        data_keys: &Arc<dyn DataKeyStore>,
+    ) -> Result<(), AuthError> {
+        let key_set = build_key_set(
+            store,
+            data_keys,
+            self.grace_secs,
+            self.env_private_pem.as_deref(),
+            self.jwt_kms_http_url.as_deref(),
+            self.jwt_kms_key_id.as_deref(),
+        )
+        .await?;
         *self
             .inner
             .write()
@@ -130,11 +168,7 @@ impl JwtKeyStore {
             token_type: "Bearer".into(),
         };
 
-        let mut header = Header::new(Algorithm::RS256);
-        header.kid = Some(key_set.active_kid.clone());
-
-        let token = encode(&header, &claims, &key_set.active_encoding)
-            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let token = encode_rs256_jwt(&key_set.active_signer, &key_set.active_kid, &claims)?;
         Ok((token, claims))
     }
 
@@ -161,10 +195,7 @@ impl JwtKeyStore {
             account_id: account_id.to_string(),
             website_id: website_id.map(|id| id.to_string()),
         };
-        let mut header = Header::new(Algorithm::RS256);
-        header.kid = Some(key_set.active_kid.clone());
-        encode(&header, &claims, &key_set.active_encoding)
-            .map_err(|e| AuthError::Internal(e.to_string()))
+        encode_rs256_jwt(&key_set.active_signer, &key_set.active_kid, &claims)
     }
 
     pub fn validate_access_token(&self, token: &str) -> Result<AccessTokenClaims, AuthError> {
@@ -184,6 +215,27 @@ impl JwtKeyStore {
         validation.set_audience(&["authsvc"]);
 
         decode::<AccessTokenClaims>(token, &verify_key.decoding, &validation)
+            .map(|data| data.claims)
+            .map_err(|_| AuthError::InvalidToken)
+    }
+
+    pub fn validate_id_token(&self, token: &str) -> Result<IdTokenClaims, AuthError> {
+        let header = decode_header(token).map_err(|_| AuthError::InvalidToken)?;
+        let kid = header.kid.ok_or(AuthError::InvalidToken)?;
+        let key_set = self
+            .inner
+            .read()
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let verify_key = key_set
+            .verify_keys
+            .get(&kid)
+            .ok_or(AuthError::InvalidToken)?;
+
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.set_issuer(&[&self.issuer]);
+        validation.set_audience(&["authsvc"]);
+
+        decode::<IdTokenClaims>(token, &verify_key.decoding, &validation)
             .map(|data| data.claims)
             .map_err(|_| AuthError::InvalidToken)
     }
@@ -224,42 +276,46 @@ impl JwtKeyStore {
 
 pub type SharedJwtKeyStore = Arc<JwtKeyStore>;
 
-async fn ensure_signing_key_in_db(
+async fn build_key_set(
     store: &dyn SigningKeyStore,
-    env_private_pem: Option<String>,
-    env_public_pem: Option<String>,
-) -> Result<(), AuthError> {
-    if store.get_active_signing_key().await?.is_some() {
-        return Ok(());
-    }
-
-    let (kid, private_pem, public_pem) = match (env_private_pem, env_public_pem) {
-        (Some(priv_pem), Some(pub_pem)) => ("authsvc-key-1".to_string(), priv_pem, pub_pem),
-        _ => {
-            tracing::warn!("generating ephemeral RSA key pair; set JWT_*_KEY_PEM for production");
-            let (priv_pem, pub_pem) = generate_rsa_keypair()?;
-            (
-                "authsvc-key-1".to_string(),
-                priv_pem,
-                pub_pem,
-            )
-        }
-    };
-
-    store
-        .store_signing_key(&kid, &private_pem, &public_pem)
-        .await
-}
-
-async fn build_key_set(store: &dyn SigningKeyStore, grace_secs: u64) -> Result<KeySet, AuthError> {
+    data_keys: &Arc<dyn DataKeyStore>,
+    grace_secs: u64,
+    env_private_pem: Option<&str>,
+    jwt_kms_http_url: Option<&str>,
+    jwt_kms_key_id: Option<&str>,
+) -> Result<KeySet, AuthError> {
     let active = store
         .get_active_signing_key()
         .await?
         .ok_or_else(|| AuthError::Internal("no active signing key".into()))?;
 
-    let (active_kid, active_private_pem, _active_public_pem) = active;
-    let active_encoding = EncodingKey::from_rsa_pem(active_private_pem.as_bytes())
-        .map_err(|e| AuthError::Internal(e.to_string()))?;
+    let (active_kid, active_public_pem, encrypted_private) = active;
+
+    if let Some(ref enc) = encrypted_private {
+        if enc.starts_with("-----BEGIN") {
+            let enc_new = encrypt_private_pem(data_keys, enc).await?;
+            store
+                .store_signing_key(&active_kid, &active_public_pem, Some(&enc_new))
+                .await?;
+        }
+    }
+
+    let active_signer = if let Some(url) = jwt_kms_http_url {
+        JwtSigningBackend::http_kms(url.to_string(), jwt_kms_key_id.map(str::to_string))
+    } else {
+        let private_pem = if let Some(env_pem) = env_private_pem {
+            env_pem.to_string()
+        } else {
+            let enc = encrypted_private.ok_or_else(|| {
+                AuthError::Internal(
+                    "JWT_PRIVATE_KEY_PEM, JWT_KMS_HTTP_URL, or encrypted signing key required"
+                        .into(),
+                )
+            })?;
+            decrypt_private_pem(data_keys, &enc).await?
+        };
+        JwtSigningBackend::local(private_pem)
+    };
 
     let jwks_rows = store.list_signing_keys_for_jwks(grace_secs).await?;
     let mut verify_keys = HashMap::new();
@@ -283,12 +339,12 @@ async fn build_key_set(store: &dyn SigningKeyStore, grace_secs: u64) -> Result<K
 
     Ok(KeySet {
         active_kid,
-        active_encoding,
+        active_signer,
         verify_keys,
     })
 }
 
-fn generate_rsa_keypair() -> Result<(String, String), AuthError> {
+pub fn generate_rsa_keypair() -> Result<(String, String), AuthError> {
     let mut rng = rand::thread_rng();
     let private = RsaPrivateKey::new(&mut rng, 2048)
         .map_err(|e| AuthError::Internal(e.to_string()))?;
@@ -312,13 +368,12 @@ mod tests {
     fn jwt_issue_and_validate_by_kid() {
         let (priv_pem, pub_pem) = generate_rsa_keypair().unwrap();
 
-        let encoding = EncodingKey::from_rsa_pem(priv_pem.as_bytes()).unwrap();
         let decoding = DecodingKey::from_rsa_pem(pub_pem.as_bytes()).unwrap();
         let kid = "test-kid".to_string();
 
         let key_set = KeySet {
             active_kid: kid.clone(),
-            active_encoding: encoding,
+            active_signer: JwtSigningBackend::local(priv_pem),
             verify_keys: HashMap::from([(
                 kid.clone(),
                 VerifyKey {
@@ -333,6 +388,9 @@ mod tests {
             issuer: "http://localhost".into(),
             access_ttl_secs: 900,
             grace_secs: 86400,
+            env_private_pem: None,
+            jwt_kms_http_url: None,
+            jwt_kms_key_id: None,
         };
 
         let (token, _) = store

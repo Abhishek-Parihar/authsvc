@@ -18,6 +18,7 @@ use uuid::Uuid;
 pub struct PostgresStore {
     pool: PgPool,
     read_pool: Option<PgPool>,
+    migrator_pool: Option<PgPool>,
 }
 
 impl PostgresStore {
@@ -25,6 +26,7 @@ impl PostgresStore {
         Self {
             pool,
             read_pool: None,
+            migrator_pool: None,
         }
     }
 
@@ -32,7 +34,13 @@ impl PostgresStore {
         Self {
             pool,
             read_pool: Some(read_pool),
+            migrator_pool: None,
         }
+    }
+
+    pub fn with_migrator_pool(mut self, migrator_pool: PgPool) -> Self {
+        self.migrator_pool = Some(migrator_pool);
+        self
     }
 
     pub fn pool(&self) -> &PgPool {
@@ -41,6 +49,33 @@ impl PostgresStore {
 
     fn read_pool(&self) -> &PgPool {
         self.read_pool.as_ref().unwrap_or(&self.pool)
+    }
+
+    /// Pool used for privileged maintenance (audit purge, DSAR cleanup).
+    pub(crate) fn privileged_pool(&self) -> &PgPool {
+        self.migrator_pool.as_ref().unwrap_or(&self.pool)
+    }
+
+    pub async fn with_tenant<F, Fut, T>(&self, account_id: Uuid, f: F) -> Result<T, AuthError>
+    where
+        F: FnOnce(&mut sqlx::Transaction<'_, sqlx::Postgres>) -> Fut,
+        Fut: std::future::Future<Output = Result<T, AuthError>>,
+    {
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        sqlx::query("SELECT set_config('app.account_id', $1, true)")
+            .bind(account_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let result = f(&mut tx).await?;
+        tx.commit()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(result)
     }
 
     pub async fn migrate(&self) -> Result<(), AuthError> {
@@ -301,6 +336,16 @@ impl MembershipRepository for PostgresStore {
         role_id: Option<Uuid>,
     ) -> Result<AccountMember, AuthError> {
         let now = Utc::now();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        sqlx::query("SELECT set_config('app.account_id', $1, true)")
+            .bind(account_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
         sqlx::query(
             "INSERT INTO account_members (account_id, user_id, role_id, status, joined_at)
              VALUES ($1, $2, $3, 'active', $4)
@@ -310,9 +355,12 @@ impl MembershipRepository for PostgresStore {
         .bind(user_id)
         .bind(role_id)
         .bind(now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
 
         Ok(AccountMember {
             account_id,
@@ -342,15 +390,28 @@ impl MembershipRepository for PostgresStore {
         account_id: Uuid,
         user_id: Uuid,
     ) -> Result<Option<AccountMember>, AuthError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        sqlx::query("SELECT set_config('app.account_id', $1, true)")
+            .bind(account_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
         let row = sqlx::query(
             "SELECT account_id, user_id, role_id, display_name, status, joined_at
              FROM account_members WHERE account_id = $1 AND user_id = $2",
         )
         .bind(account_id)
         .bind(user_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
 
         Ok(row.map(map_account_member))
     }
@@ -568,6 +629,16 @@ impl RoleRepository for PostgresStore {
         account_id: Uuid,
         website_id: Option<Uuid>,
     ) -> Result<Vec<Permission>, AuthError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        sqlx::query("SELECT set_config('app.account_id', $1, true)")
+            .bind(account_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
         let rows = sqlx::query(
             "WITH RECURSIVE effective_roles AS (
                 SELECT role_id FROM account_members
@@ -595,9 +666,12 @@ impl RoleRepository for PostgresStore {
         .bind(user_id)
         .bind(account_id)
         .bind(website_id)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
 
         Ok(rows
             .into_iter()

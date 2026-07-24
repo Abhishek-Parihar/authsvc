@@ -37,31 +37,58 @@ impl PostgresStore {
         account_id: Uuid,
     ) -> Result<Uuid, AuthError> {
         let id = Uuid::new_v4();
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        sqlx::query("SELECT set_config('app.account_id', $1, true)")
+            .bind(account_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
         sqlx::query(
             "INSERT INTO data_export_requests (id, user_id, account_id, status) VALUES ($1, $2, $3, 'pending')",
         )
         .bind(id)
         .bind(user_id)
         .bind(account_id)
-        .execute(self.pool())
+        .execute(&mut *tx)
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
         Ok(id)
     }
 
     pub async fn complete_export_request(
         &self,
         id: Uuid,
+        account_id: Uuid,
         artifact: &serde_json::Value,
     ) -> Result<(), AuthError> {
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        sqlx::query("SELECT set_config('app.account_id', $1, true)")
+            .bind(account_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
         sqlx::query(
             "UPDATE data_export_requests SET status = 'completed', artifact = $2, completed_at = NOW() WHERE id = $1",
         )
         .bind(id)
         .bind(artifact)
-        .execute(self.pool())
+        .execute(&mut *tx)
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
         Ok(())
     }
 
@@ -172,12 +199,137 @@ impl PostgresStore {
 
     pub async fn purge_old_refresh_tokens(&self, days: i64) -> Result<u64, AuthError> {
         let result = sqlx::query(
-            "DELETE FROM refresh_tokens WHERE revoked = TRUE AND expires_at < NOW() - make_interval(days => $1)",
+            "DELETE FROM refresh_tokens WHERE revoked = TRUE AND expires_at < NOW() - make_interval(days => $1::integer)",
         )
         .bind(days)
         .execute(self.pool())
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
         Ok(result.rows_affected())
+    }
+
+    pub async fn purge_old_audit_events(&self, days: i64) -> Result<u64, AuthError> {
+        let account_ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM accounts")
+            .fetch_all(self.pool())
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let mut total = 0u64;
+        for account_id in account_ids {
+            let mut tx = self
+                .privileged_pool()
+                .begin()
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?;
+            sqlx::query("SELECT set_config('app.account_id', $1, true)")
+                .bind(account_id.to_string())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?;
+            let result = sqlx::query(
+                "DELETE FROM audit_events
+                 WHERE account_id = $1
+                   AND created_at < NOW() - make_interval(days => $2::integer)",
+            )
+            .bind(account_id)
+            .bind(days)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?;
+            total += result.rows_affected();
+        }
+        let null_deleted = sqlx::query(
+            "DELETE FROM audit_events
+             WHERE account_id IS NULL
+               AND created_at < NOW() - make_interval(days => $1::integer)",
+        )
+        .bind(days)
+        .execute(self.privileged_pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?
+        .rows_affected();
+        Ok(total + null_deleted)
+    }
+
+    pub async fn purge_old_dsar_artifacts(&self, days: i64) -> Result<u64, AuthError> {
+        let account_ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM accounts")
+            .fetch_all(self.pool())
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let mut total = 0u64;
+        for account_id in account_ids {
+            let mut tx = self
+                .privileged_pool()
+                .begin()
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?;
+            sqlx::query("SELECT set_config('app.account_id', $1, true)")
+                .bind(account_id.to_string())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?;
+            let result = sqlx::query(
+                "DELETE FROM data_export_requests
+                 WHERE account_id = $1
+                   AND completed_at IS NOT NULL
+                   AND completed_at < NOW() - make_interval(days => $2::integer)",
+            )
+            .bind(account_id)
+            .bind(days)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?;
+            total += result.rows_affected();
+        }
+        Ok(total)
+    }
+
+    pub async fn complete_erasure(&self, user_id: Uuid, account_ids: &[Uuid]) -> Result<(), AuthError> {
+        for query in [
+            "DELETE FROM user_identities WHERE user_id = $1",
+            "DELETE FROM user_mfa_secrets WHERE user_id = $1",
+            "DELETE FROM webauthn_credentials WHERE user_id = $1",
+        ] {
+            sqlx::query(query)
+                .bind(user_id)
+                .execute(self.pool())
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?;
+        }
+        for account_id in account_ids {
+            let mut tx = self
+                .pool()
+                .begin()
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?;
+            sqlx::query("SELECT set_config('app.account_id', $1, true)")
+                .bind(account_id.to_string())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?;
+            sqlx::query("DELETE FROM account_members WHERE user_id = $1 AND account_id = $2")
+                .bind(user_id)
+                .bind(account_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?;
+            sqlx::query(
+                "DELETE FROM data_export_requests WHERE user_id = $1 AND account_id = $2",
+            )
+            .bind(user_id)
+            .bind(account_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?;
+        }
+        Ok(())
     }
 }

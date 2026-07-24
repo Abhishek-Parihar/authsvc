@@ -64,6 +64,7 @@ pub async fn federation_callback(
     state_param: &str,
     code: &str,
     client_id: &str,
+    saml_request_id: Option<&str>,
 ) -> Result<auth::TokenResponse, AuthError> {
     let (account_id, provider) = state
         .repos
@@ -74,7 +75,23 @@ pub async fn federation_callback(
 
     let redirect = format!("{}/oauth/federate/{provider}/callback", state.config.issuer);
     let idp = resolve_provider(state, account_id, &provider, &redirect).await?;
-    let fed = idp.exchange_code(code, &redirect).await?;
+
+    let fed = if let Some((_, _, config)) = state
+        .repos
+        .idp_configs()
+        .get(account_id, &provider)
+        .await?
+    {
+        if config.get("type").and_then(|v| v.as_str()) == Some("saml") {
+            let saml =
+                authsvc_idp::saml::SamlProvider::from_config(&config, &state.config.issuer)?;
+            saml.parse_response(code, saml_request_id)?
+        } else {
+            idp.exchange_code(code, &redirect).await?
+        }
+    } else {
+        idp.exchange_code(code, &redirect).await?
+    };
 
     let user_id = if let Some(uid) = state
         .repos
@@ -82,6 +99,19 @@ pub async fn federation_callback(
         .find_identity(&provider, &fed.subject)
         .await?
     {
+        if state
+            .repos
+            .memberships()
+            .get_account_member(account_id, uid)
+            .await?
+            .is_none()
+        {
+            state
+                .repos
+                .memberships()
+                .add_account_member(account_id, uid, None)
+                .await?;
+        }
         uid
     } else if let Some(email) = &fed.email {
         let user = match state.repos.users().find_by_email(email).await? {
@@ -109,6 +139,19 @@ pub async fn federation_callback(
                 user
             }
         };
+        if state
+            .repos
+            .memberships()
+            .get_account_member(account_id, user.id)
+            .await?
+            .is_none()
+        {
+            state
+                .repos
+                .memberships()
+                .add_account_member(account_id, user.id, None)
+                .await?;
+        }
         state
             .repos
             .federation()
@@ -143,5 +186,5 @@ pub async fn federation_callback(
         )
         .await?;
 
-    auth::complete_login(state, &user, &client).await
+    auth::issue_user_tokens_for_account(state, &user, &client, account_id).await
 }

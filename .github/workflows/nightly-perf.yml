@@ -1,0 +1,56 @@
+name: Nightly Perf
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  perf-smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: authsvc
+          POSTGRES_PASSWORD: authsvc
+          POSTGRES_DB: authsvc
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release -p authsvc-server
+
+      - name: Perf smoke (short)
+        env:
+          DATABASE_URL: postgres://authsvc:authsvc@localhost:5432/authsvc
+          REDIS_URL: redis://127.0.0.1:6379
+          PORT: "18080"
+          DURATION: "5s"
+          CONCURRENCY: "20"
+          BOOTSTRAP_SECRET: perf-nightly
+        run: |
+          chmod +x scripts/perf_test.sh
+          ./scripts/perf_test.sh

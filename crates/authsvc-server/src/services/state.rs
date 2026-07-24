@@ -19,7 +19,10 @@ use crate::{
         notifications::build_notifier,
         webauthn::WebAuthnService,
     },
-    stores::{PostgresStore, RedisSessionStore, Repositories},
+    stores::{
+        cached_permissions::CachedPermissionLoader, PostgresStore, RedisSessionStore,
+        Repositories,
+    },
 };
 
 #[derive(Clone)]
@@ -45,7 +48,9 @@ impl AppState {
         webauthn: Option<Arc<WebAuthnService>>,
     ) -> Result<Self, AuthError> {
         let repos = Repositories::new(store);
-        repos.postgres().migrate().await?;
+        if config.migrate_on_start {
+            repos.postgres().migrate().await?;
+        }
         repos.accounts().ensure_default().await?;
 
         let data_keys = build_data_key_store(
@@ -55,13 +60,17 @@ impl AppState {
             config.is_production(),
         )?;
 
-        let jwt = JwtKeyStore::load_from_db(
+        let jwt = JwtKeyStore::load(
             repos.signing_keys(),
+            &data_keys,
             &config.issuer,
             config.access_token_ttl_secs,
             config.jwt_key_grace_secs,
             config.jwt_private_key_pem.clone(),
             config.jwt_public_key_pem.clone(),
+            config.jwt_kms_http_url.clone(),
+            config.jwt_kms_key_id.clone(),
+            !config.is_production(),
         )
         .await?;
 
@@ -71,7 +80,11 @@ impl AppState {
         );
 
         let postgres = repos.postgres().clone();
-        let rbac = RbacEvaluator::new(Arc::new(postgres.clone()) as Arc<dyn rbac::PermissionLoader>);
+        let permission_loader = Arc::new(CachedPermissionLoader::new(
+            Arc::new(postgres.clone()),
+            sessions.clone(),
+        )) as Arc<dyn rbac::PermissionLoader>;
+        let rbac = RbacEvaluator::new(permission_loader);
         let casbin = CasbinEvaluator::new(
             Arc::new(postgres.clone()) as Arc<dyn authsvc_policy::casbin::CasbinPolicyLoader>,
         );
@@ -189,10 +202,29 @@ impl AppState {
             });
             let url = url.clone();
             tokio::spawn(async move {
-                let _ = client.post(&url).json(&body).send().await;
+                export_audit_to_siem(&client, &url, body).await;
             });
         }
 
         Ok(())
     }
+}
+
+async fn export_audit_to_siem(client: &reqwest::Client, url: &str, body: serde_json::Value) {
+    let mut last_error = None;
+    for attempt in 1..=3 {
+        match client.post(url).json(&body).send().await {
+            Ok(resp) if resp.status().is_success() => return,
+            Ok(resp) => last_error = Some(format!("HTTP {}", resp.status())),
+            Err(e) => last_error = Some(e.to_string()),
+        }
+        if attempt < 3 {
+            tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+        }
+    }
+    tracing::warn!(
+        error = ?last_error,
+        url = url,
+        "audit SIEM export failed after retries"
+    );
 }

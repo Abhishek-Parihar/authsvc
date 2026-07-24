@@ -9,17 +9,23 @@ pub async fn rotate_keys(state: &AppState) -> Result<String, AuthError> {
     let kid = format!("authsvc-key-{}", &Uuid::new_v4().to_string()[..8]);
     let kid_clone = kid.clone();
 
-    let (priv_pem, pub_pem) = tokio::task::spawn_blocking(generate_rsa_keypair)
+    let (priv_pem, pub_pem) = tokio::task::spawn_blocking(crate::crypto::jwt::generate_rsa_keypair)
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))??;
+
+    let encrypted =
+        crate::crypto::signing_keys::encrypt_private_pem(&state.data_keys, &priv_pem).await?;
 
     state
         .repos
         .signing_keys()
-        .store_signing_key(&kid, &priv_pem, &pub_pem)
+        .store_signing_key(&kid, &pub_pem, Some(&encrypted))
         .await?;
 
-    state.jwt.reload(state.repos.signing_keys()).await?;
+    state
+        .jwt
+        .reload(state.repos.signing_keys(), &state.data_keys)
+        .await?;
 
     state
         .audit(
@@ -33,25 +39,6 @@ pub async fn rotate_keys(state: &AppState) -> Result<String, AuthError> {
         .await?;
 
     Ok(kid)
-}
-
-fn generate_rsa_keypair() -> Result<(String, String), AuthError> {
-    use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
-    use rsa::RsaPrivateKey;
-
-    let mut rng = rand::thread_rng();
-    let private = RsaPrivateKey::new(&mut rng, 2048)
-        .map_err(|e| AuthError::Internal(e.to_string()))?;
-    let public = rsa::RsaPublicKey::from(&private);
-    let priv_pem = private
-        .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
-        .map_err(|e| AuthError::Internal(e.to_string()))?
-        .to_string();
-    let pub_pem = public
-        .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
-        .map_err(|e| AuthError::Internal(e.to_string()))?
-        .to_string();
-    Ok((priv_pem, pub_pem))
 }
 
 pub fn dispatch_webhook(

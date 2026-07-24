@@ -5,8 +5,8 @@ use authsvc_idp::{
 };
 use axum::{
     middleware as axum_mw,
-    routing::{get, post},
-    Router,
+    routing::{get, patch, post},
+    Extension, Router,
 };
 use sqlx::postgres::PgPoolOptions;
 use tower_http::{
@@ -31,20 +31,26 @@ use crate::{
         },
         compliance::compliance_status,
         federation::{federate_callback, federate_start},
+        device::{device_approve, device_authorization, device_page},
         health::{health, metrics, ready},
         idp_config::{delete_idp_config, list_idp_configs, upsert_idp_config},
         oidc::{
-            authorize, check, introspect, logout, oauth_login, openid_configuration, userinfo, jwks,
+            authorize, check, introspect, logout_get, logout_post, oauth_login, openid_configuration, userinfo, jwks,
         },
         portal::get_portal_from_map,
         privacy::{delete_user, export_user},
-        saml::{saml_acs, saml_login, saml_metadata},
-        scim::{create_user as scim_create_user, delete_user as scim_delete_user, get_user as scim_get_user, list_groups as scim_list_groups, list_users as scim_list_users},
+        saml::{saml_acs, saml_login, saml_logout, saml_metadata, saml_slo},
+        saml_idp::{
+            create_saml_sp, delete_saml_sp, idp_login, idp_metadata, idp_sso_get, idp_sso_post,
+            list_audit_events, list_saml_sps, search_users,
+        },
+        scim::{create_user as scim_create_user, delete_user as scim_delete_user, get_group as scim_get_group, get_user as scim_get_user, list_groups as scim_list_groups, list_users as scim_list_users, patch_group as scim_patch_group, patch_user as scim_patch_user},
         sessions::{list_sessions, revoke_all_sessions, revoke_session},
+        ui::{admin_page, login_page},
         webauthn::{login_begin, login_finish, register_begin, register_finish},
         SharedState,
     },
-    middleware::{require_admin, require_bootstrap_or_open, security_headers, set_account_context},
+    middleware::{require_admin, require_authenticated, require_bootstrap_or_open, require_metrics_token, security_headers, set_account_context},
     services::{
         archival::spawn_archival_loop,
         state::AppState,
@@ -67,6 +73,15 @@ pub async fn build_state(config: Config) -> anyhow::Result<Arc<AppState>> {
         PostgresStore::with_read_pool(pool, read_pool)
     } else {
         PostgresStore::new(pool)
+    };
+    let store = if let Some(migrator_url) = &config.database_migrator_url {
+        let migrator_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(migrator_url)
+            .await?;
+        store.with_migrator_pool(migrator_pool)
+    } else {
+        store
     };
     let sessions = RedisSessionStore::new(&config.redis_url)?;
 
@@ -124,6 +139,10 @@ pub async fn build_state_and_spawn_jobs(config: Config) -> anyhow::Result<Arc<Ap
 }
 
 pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometheus::PrometheusHandle) -> Router {
+    if state.config.is_production() && state.config.allowed_origins.is_empty() {
+        panic!("ALLOWED_ORIGINS must be set in production");
+    }
+
     let cors = if state.config.allowed_origins.is_empty() {
         CorsLayer::new()
             .allow_origin(Any)
@@ -142,10 +161,17 @@ pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometh
             .allow_headers(Any)
     };
 
+    let metrics = Router::new()
+        .route("/metrics", get(metrics))
+        .layer(Extension(metrics_handle))
+        .layer(axum_mw::from_fn_with_state(
+            state.clone(),
+            require_metrics_token,
+        ));
+
     let public = Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
-        .route("/metrics", get(move || metrics(metrics_handle.clone())))
         .route(
             "/.well-known/openid-configuration",
             get(openid_configuration),
@@ -157,7 +183,12 @@ pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometh
         .route("/oauth/introspect", post(introspect))
         .route("/oauth/authorize", get(authorize))
         .route("/oauth/login", post(oauth_login))
-        .route("/oauth/logout", post(logout))
+        .route("/oauth/logout", get(logout_get).post(logout_post))
+        .route("/oauth/device_authorization", post(device_authorization))
+        .route("/login", get(login_page))
+        .route("/admin", get(admin_page))
+        .route("/device", get(device_page))
+        .route("/device/approve", axum::routing::post(device_approve))
         .route("/oauth/mfa", post(complete_mfa))
         .route("/oauth/select-account", post(select_account))
         .route("/v1/portal", get(get_portal_from_map))
@@ -173,13 +204,26 @@ pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometh
         .route("/saml/metadata", get(saml_metadata))
         .route("/saml/login", get(saml_login))
         .route("/saml/acs", post(saml_acs))
-        .route("/v1/compliance/status", get(compliance_status))
+        .route("/saml/slo", get(saml_slo).post(saml_slo))
+        .route("/saml/logout", get(saml_logout))
+        .route("/saml/idp/metadata", get(idp_metadata))
+        .route(
+            "/saml/idp/sso",
+            get(idp_sso_get).post(idp_sso_post),
+        )
+        .route("/saml/idp/login", post(idp_login))
         .route("/scim/v2/Users", get(scim_list_users).post(scim_create_user))
         .route(
             "/scim/v2/Users/{id}",
-            get(scim_get_user).delete(scim_delete_user),
+            get(scim_get_user)
+                .patch(scim_patch_user)
+                .delete(scim_delete_user),
         )
         .route("/scim/v2/Groups", get(scim_list_groups))
+        .route(
+            "/scim/v2/Groups/{id}",
+            get(scim_get_group).patch(scim_patch_group),
+        )
         .route("/v1/webauthn/login/begin", post(login_begin))
         .route("/v1/webauthn/login/finish", post(login_finish));
 
@@ -189,6 +233,19 @@ pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometh
             state.clone(),
             require_bootstrap_or_open,
         ));
+
+    let authenticated = Router::new()
+        .route("/v1/users/{id}/export", get(export_user))
+        .route("/v1/users/{id}/privacy", axum::routing::delete(delete_user))
+        .route("/v1/users/{id}/sessions", get(list_sessions))
+        .route("/v1/users/{id}/sessions/revoke-all", post(revoke_all_sessions))
+        .route("/v1/sessions/{id}", axum::routing::delete(revoke_session))
+        .route("/v1/mfa/enroll", post(mfa_enroll))
+        .route("/v1/mfa/verify", post(mfa_verify))
+        .route("/v1/mfa/disable", post(mfa_disable))
+        .route("/v1/webauthn/register/begin", post(register_begin))
+        .route("/v1/webauthn/register/finish", post(register_finish))
+        .layer(axum_mw::from_fn_with_state(state.clone(), require_authenticated));
 
     let admin = Router::new()
         .route("/v1/clients", post(create_client).get(list_clients))
@@ -212,21 +269,24 @@ pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometh
         .route("/v1/idp-configs", get(list_idp_configs))
         .route("/v1/idp-configs/{provider}", post(upsert_idp_config).delete(delete_idp_config))
         .route("/v1/scim-tokens", post(create_scim_token_handler))
-        .route("/v1/users/{id}/export", get(export_user))
-        .route("/v1/users/{id}/privacy", axum::routing::delete(delete_user))
-        .route("/v1/users/{id}/sessions", get(list_sessions))
-        .route("/v1/users/{id}/sessions/revoke-all", post(revoke_all_sessions))
-        .route("/v1/sessions/{id}", axum::routing::delete(revoke_session))
         .route("/v1/keys/rotate", post(admin_rotate_keys))
-        .route("/v1/mfa/enroll", post(mfa_enroll))
-        .route("/v1/mfa/verify", post(mfa_verify))
-        .route("/v1/mfa/disable", post(mfa_disable))
-        .route("/v1/webauthn/register/begin", post(register_begin))
-        .route("/v1/webauthn/register/finish", post(register_finish))
+        .route("/v1/compliance/status", get(compliance_status))
+        .route("/v1/users", get(search_users))
+        .route("/v1/audit/events", get(list_audit_events))
+        .route(
+            "/v1/saml/service-providers",
+            get(list_saml_sps).post(create_saml_sp),
+        )
+        .route(
+            "/v1/saml/service-providers/{id}",
+            axum::routing::delete(delete_saml_sp),
+        )
         .layer(axum_mw::from_fn_with_state(state.clone(), require_admin));
 
     public
+        .merge(metrics)
         .merge(bootstrap)
+        .merge(authenticated)
         .merge(admin)
         .layer(axum_mw::from_fn_with_state(state.clone(), set_account_context))
         .layer(axum_mw::from_fn_with_state(state.clone(), security_headers))

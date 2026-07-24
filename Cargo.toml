@@ -9,10 +9,17 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 authors = ["Abhishek Parihar"]
+description = "Self-hosted OAuth 2.0 / OpenID Connect authorization server"
+repository = "https://github.com/Abhishek-Parihar/authsvc"
+homepage = "https://github.com/Abhishek-Parihar/authsvc"
+documentation = "https://github.com/Abhishek-Parihar/authsvc/blob/main/docs/README.md"
+readme = "README.md"
+keywords = ["oauth", "oidc", "authentication", "authorization", "jwt", "saml", "webauthn"]
+categories = ["authentication", "web-programming::http-server"]
 
 [workspace.dependencies]
 aes-gcm = "0.10"
@@ -28,10 +35,11 @@ hmac = "0.12"
 jsonwebtoken = "9"
 oauth2 = "4"
 openidconnect = "3"
+quick-xml = "0.41"
 rand = "0.8"
 redis = { version = "0.27", features = ["tokio-comp"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-rsa = { version = "0.9", features = ["pem"] }
+rsa = { version = "0.9", features = ["pem", "sha2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

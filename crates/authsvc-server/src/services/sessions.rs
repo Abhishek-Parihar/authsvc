@@ -32,6 +32,22 @@ pub async fn list_sessions(state: &AppState, user_id: Uuid) -> Result<Vec<Value>
     Ok(sessions)
 }
 
+pub async fn session_user_id(state: &AppState, session_id: Uuid) -> Result<Uuid, AuthError> {
+    let mut conn = state
+        .sessions
+        .pool()
+        .get()
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+    let key = format!("session:{session_id}");
+    let val: Option<String> = conn
+        .get(&key)
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+    let user_id = val.ok_or(AuthError::NotFound("session".into()))?;
+    Uuid::parse_str(&user_id).map_err(|_| AuthError::Internal("invalid session user".into()))
+}
+
 pub async fn revoke_session(state: &AppState, session_id: Uuid) -> Result<(), AuthError> {
     state.sessions.delete(session_id).await
 }

@@ -91,6 +91,16 @@ pub async fn register_user(
         .postgres()
         .assign_admin_membership(user.id, account.id)
         .await?;
+
+    if let Some(name) = &user.display_name {
+        let website = platform::default_website(state).await?;
+        state
+            .repos
+            .postgres()
+            .upsert_user_profile(user.id, website.id, Some(name.as_str()), None, None)
+            .await?;
+    }
+
     state
         .audit(
             Some(account.id),
@@ -277,11 +287,11 @@ pub async fn complete_account_selection(
     issue_user_tokens_for_account(state, &user, &client, account_id).await
 }
 
-pub async fn client_credentials_grant(
+pub async fn verify_confidential_client(
     state: &AppState,
     client_id: &str,
     client_secret: &str,
-) -> Result<TokenResponse, AuthError> {
+) -> Result<authsvc_core::OAuthClient, AuthError> {
     state
         .rate_limiter
         .check(&format!("token:{client_id}"))
@@ -306,6 +316,16 @@ pub async fn client_credentials_grant(
     if !verify_secret(client_secret, secret_hash)? {
         return Err(AuthError::InvalidClientCredentials);
     }
+
+    Ok(client)
+}
+
+pub async fn client_credentials_grant(
+    state: &AppState,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<TokenResponse, AuthError> {
+    let client = verify_confidential_client(state, client_id, client_secret).await?;
 
     let account_id = state.repos.portal().website_account_id(client.website_id).await?;
     let scopes = client.scopes.clone();
@@ -464,6 +484,17 @@ pub async fn create_oauth_client(
     redirect_uris: Vec<String>,
 ) -> Result<(authsvc_core::OAuthClient, Option<String>), AuthError> {
     let website = platform::default_website(state).await?;
+    let grant_types = vec![
+        "authorization_code".into(),
+        "password".into(),
+        "refresh_token".into(),
+        "client_credentials".into(),
+    ];
+    crate::security::redirect_uri::validate_client_redirect_uris(
+        &redirect_uris,
+        &grant_types,
+        state.config.is_production(),
+    )?;
 
     let client_id = format!("cli_{}", &Uuid::new_v4().to_string().replace('-', "")[..16]);
     state
@@ -474,12 +505,7 @@ pub async fn create_oauth_client(
             website_id: website.id,
             name: name.to_string(),
             client_type: ClientType::Web,
-            grant_types: vec![
-                "authorization_code".into(),
-                "password".into(),
-                "refresh_token".into(),
-                "client_credentials".into(),
-            ],
+            grant_types,
             redirect_uris,
             scopes: vec!["openid".into(), "profile".into(), "email".into()],
             is_confidential: true,

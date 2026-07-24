@@ -59,7 +59,7 @@ pub async fn request_export(
     state
         .repos
         .privacy()
-        .complete_export_request(export_id, &artifact)
+        .complete_export_request(export_id, account_id, &artifact)
         .await?;
     state
         .audit(
@@ -81,6 +81,18 @@ pub async fn delete_user(
 ) -> Result<(), AuthError> {
     state.repos.privacy().soft_delete_user(user_id).await?;
     state.repos.postgres().revoke_user_refresh_tokens(user_id).await?;
+    let memberships = state
+        .repos
+        .memberships()
+        .list_user_accounts(user_id)
+        .await?;
+    let account_ids: Vec<Uuid> = memberships.iter().map(|m| m.account_id).collect();
+    state
+        .repos
+        .privacy()
+        .complete_erasure(user_id, &account_ids)
+        .await?;
+    super::sessions::revoke_all_sessions(state, user_id).await?;
     state.repos.privacy().anonymize_user(user_id).await?;
     state
         .audit(

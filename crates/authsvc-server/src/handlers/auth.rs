@@ -86,6 +86,7 @@ pub struct TokenRequest {
     pub redirect_uri: Option<String>,
     pub code_verifier: Option<String>,
     pub api_key: Option<String>,
+    pub device_code: Option<String>,
 }
 
 pub async fn token(
@@ -104,6 +105,7 @@ pub async fn token(
         redirect_uri: None,
         code_verifier: None,
         api_key: None,
+        device_code: None,
     });
 
     if let Some(auth) = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()) {
@@ -189,6 +191,18 @@ pub async fn token(
             let tokens = api_key_grant(&state, &api_key).await?;
             Ok(Json(tokens))
         }
+        "urn:ietf:params:oauth:grant-type:device_code" => {
+            let client_id = req.client_id.ok_or_else(|| {
+                ApiError(AuthError::Validation("client_id required".into()))
+            })?;
+            let device_code = req.device_code.ok_or_else(|| {
+                ApiError(AuthError::Validation("device_code required".into()))
+            })?;
+            let tokens =
+                crate::services::device_flow::device_code_grant(&state, &client_id, &device_code)
+                    .await?;
+            Ok(Json(tokens))
+        }
         other => Err(ApiError(AuthError::UnsupportedGrantType(other.into()))),
     }
 }
@@ -229,10 +243,17 @@ pub struct MfaEnrollRequest {
 
 pub async fn mfa_enroll(
     State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<MfaEnrollRequest>,
 ) -> AppResult<impl IntoResponse> {
     let user_id = uuid::Uuid::parse_str(&body.user_id)
         .map_err(|_| ApiError(AuthError::Validation("invalid user_id".into())))?;
+    let claims = extract_bearer_user(&state, &headers).await?;
+    let caller_id = uuid::Uuid::parse_str(&claims.sub)
+        .map_err(|_| ApiError(AuthError::InvalidToken))?;
+    let account_id = uuid::Uuid::parse_str(&claims.account_id)
+        .map_err(|_| ApiError(AuthError::InvalidToken))?;
+    crate::services::authz::authorize_user_access(&state, caller_id, account_id, user_id).await?;
     let (url, recovery) = enroll_totp(&state, user_id).await?;
     Ok(Json(json!({"otpauth_url": url, "recovery_codes": recovery})))
 }
@@ -245,20 +266,34 @@ pub struct MfaVerifyRequest {
 
 pub async fn mfa_verify(
     State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<MfaVerifyRequest>,
 ) -> AppResult<impl IntoResponse> {
     let user_id = uuid::Uuid::parse_str(&body.user_id)
         .map_err(|_| ApiError(AuthError::Validation("invalid user_id".into())))?;
-    crate::services::mfa::verify_totp(&state, user_id, &body.code).await?;
+    let claims = extract_bearer_user(&state, &headers).await?;
+    let caller_id = uuid::Uuid::parse_str(&claims.sub)
+        .map_err(|_| ApiError(AuthError::InvalidToken))?;
+    let account_id = uuid::Uuid::parse_str(&claims.account_id)
+        .map_err(|_| ApiError(AuthError::InvalidToken))?;
+    crate::services::authz::authorize_user_access(&state, caller_id, account_id, user_id).await?;
+    crate::services::mfa::verify_totp_and_enable(&state, user_id, &body.code).await?;
     Ok(Json(json!({"verified": true})))
 }
 
 pub async fn mfa_disable(
     State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<MfaEnrollRequest>,
 ) -> AppResult<impl IntoResponse> {
     let user_id = uuid::Uuid::parse_str(&body.user_id)
         .map_err(|_| ApiError(AuthError::Validation("invalid user_id".into())))?;
+    let claims = extract_bearer_user(&state, &headers).await?;
+    let caller_id = uuid::Uuid::parse_str(&claims.sub)
+        .map_err(|_| ApiError(AuthError::InvalidToken))?;
+    let account_id = uuid::Uuid::parse_str(&claims.account_id)
+        .map_err(|_| ApiError(AuthError::InvalidToken))?;
+    crate::services::authz::authorize_user_access(&state, caller_id, account_id, user_id).await?;
     disable_mfa(&state, user_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

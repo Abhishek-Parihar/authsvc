@@ -9,6 +9,7 @@ use serde_json::json;
 pub mod admin;
 pub mod auth;
 pub mod compliance;
+pub mod device;
 pub mod federation;
 pub mod health;
 pub mod idp_config;
@@ -16,8 +17,10 @@ pub mod oidc;
 pub mod portal;
 pub mod privacy;
 pub mod saml;
+pub mod saml_idp;
 pub mod scim;
 pub mod sessions;
+pub mod ui;
 pub mod webauthn;
 
 pub struct ApiError(pub AuthError);
@@ -45,6 +48,8 @@ impl IntoResponse for ApiError {
             AuthError::Validation(_) | AuthError::UnsupportedGrantType(_) => {
                 (StatusCode::BAD_REQUEST, "invalid_request")
             }
+            AuthError::AuthorizationPending => (StatusCode::BAD_REQUEST, "authorization_pending"),
+            AuthError::SlowDown => (StatusCode::BAD_REQUEST, "slow_down"),
             AuthError::AccountLocked(_) => (StatusCode::LOCKED, "account_locked"),
             AuthError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "server_error"),
         };
@@ -53,10 +58,19 @@ impl IntoResponse for ApiError {
             status,
             Json(json!({
                 "error": code,
-                "error_description": self.0.to_string()
+                "error_description": error_description(&self.0)
             })),
         )
             .into_response()
+    }
+}
+
+fn error_description(err: &AuthError) -> String {
+    match err {
+        AuthError::Internal(_) => "internal server error".into(),
+        AuthError::AuthorizationPending => "authorization pending".into(),
+        AuthError::SlowDown => "slow down".into(),
+        other => other.to_string(),
     }
 }
 

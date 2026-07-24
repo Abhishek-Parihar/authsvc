@@ -37,7 +37,6 @@ impl SmtpNotificationSender {
 #[async_trait]
 impl NotificationSender for SmtpNotificationSender {
     async fn send_email(&self, to: &str, subject: &str, body: &str) -> Result<(), AuthError> {
-        // HTTP relay style SMTP gateway (e.g. Mailgun/SendGrid HTTP API) via SMTP_URL
         let payload = serde_json::json!({
             "from": self.from,
             "to": to,
@@ -62,10 +61,67 @@ impl NotificationSender for SmtpNotificationSender {
     }
 }
 
-pub fn build_notifier() -> Box<dyn NotificationSender> {
-    if let Some(smtp) = SmtpNotificationSender::from_env() {
-        Box::new(smtp)
-    } else {
-        Box::new(LogNotificationSender)
+pub struct TwilioNotificationSender {
+    account_sid: String,
+    auth_token: String,
+    from_number: String,
+    client: reqwest::Client,
+    email_fallback: Option<SmtpNotificationSender>,
+}
+
+impl TwilioNotificationSender {
+    pub fn from_env() -> Option<Self> {
+        let account_sid = std::env::var("TWILIO_ACCOUNT_SID").ok()?;
+        let auth_token = std::env::var("TWILIO_AUTH_TOKEN").ok()?;
+        let from_number = std::env::var("TWILIO_FROM_NUMBER").ok()?;
+        Some(Self {
+            account_sid,
+            auth_token,
+            from_number,
+            client: reqwest::Client::new(),
+            email_fallback: SmtpNotificationSender::from_env(),
+        })
     }
+}
+
+#[async_trait]
+impl NotificationSender for TwilioNotificationSender {
+    async fn send_email(&self, to: &str, subject: &str, body: &str) -> Result<(), AuthError> {
+        if let Some(smtp) = &self.email_fallback {
+            smtp.send_email(to, subject, body).await
+        } else {
+            LogNotificationSender.send_email(to, subject, body).await
+        }
+    }
+
+    async fn send_sms(&self, to: &str, body: &str) -> Result<(), AuthError> {
+        let url = format!(
+            "https://api.twilio.com/2010-04-01/Accounts/{}/Messages.json",
+            self.account_sid
+        );
+        self.client
+            .post(&url)
+            .basic_auth(&self.account_sid, Some(&self.auth_token))
+            .form(&[
+                ("To", to),
+                ("From", self.from_number.as_str()),
+                ("Body", body),
+            ])
+            .send()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?
+            .error_for_status()
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(())
+    }
+}
+
+pub fn build_notifier() -> Box<dyn NotificationSender> {
+    if let Some(twilio) = TwilioNotificationSender::from_env() {
+        return Box::new(twilio);
+    }
+    if let Some(smtp) = SmtpNotificationSender::from_env() {
+        return Box::new(smtp);
+    }
+    Box::new(LogNotificationSender)
 }
