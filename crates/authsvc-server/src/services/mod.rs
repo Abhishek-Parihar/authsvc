@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod api_keys;
+pub mod admin_session;
 pub mod archival;
 pub mod auth;
 pub mod authz;

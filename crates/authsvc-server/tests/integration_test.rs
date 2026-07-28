@@ -1486,8 +1486,8 @@ async fn saml_idp_sso_login_flow() {
         .error_for_status()
         .expect("register status");
 
-    let sp_entity = "https://sp.example.com";
-    let acs_url = "https://sp.example.com/saml/acs";
+    let sp_entity = format!("https://example.com/sp-{}", uuid::Uuid::new_v4());
+    let acs_url = "https://example.com/saml/acs";
     let sp = client
         .post(format!("{base}/v1/saml/service-providers"))
         .header("Authorization", "Bearer test-bootstrap-secret")
@@ -1520,7 +1520,7 @@ async fn saml_idp_sso_login_flow() {
     assert!(metadata.contains("IDPSSODescriptor"));
 
     let builder = authsvc_idp::saml_authn_request::SamlAuthnRequestBuilder::new(
-        sp_entity,
+        &sp_entity,
         acs_url,
         &format!("{base}/saml/idp/sso"),
     );

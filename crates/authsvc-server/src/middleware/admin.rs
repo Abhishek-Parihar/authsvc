@@ -8,16 +8,34 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    handlers::SharedState,
+    handlers::{admin_session::admin_session_id_from_headers, SharedState},
     middleware::{api_key_has_admin, authenticate, extract_api_key, AuthContext},
-    services::{api_keys::validate_api_key, auth::is_bootstrap_open, authz::user_has_admin_permission},
+    services::{
+        admin_session::resolve_admin_bearer_from_cookie,
+        api_keys::validate_api_key,
+        auth::is_bootstrap_open,
+        authz::user_has_admin_permission,
+    },
 };
 
 pub async fn require_admin(
     State(state): State<SharedState>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
+    if let Some(session_id) = admin_session_id_from_headers(request.headers()) {
+        if let Ok(Some(token)) = resolve_admin_bearer_from_cookie(&state, &session_id).await {
+            if request.headers().get(AUTHORIZATION).is_none() {
+                request.headers_mut().insert(
+                    AUTHORIZATION,
+                    format!("Bearer {token}")
+                        .parse()
+                        .expect("valid bearer header"),
+                );
+            }
+        }
+    }
+
     let auth_header = request
         .headers()
         .get(AUTHORIZATION)

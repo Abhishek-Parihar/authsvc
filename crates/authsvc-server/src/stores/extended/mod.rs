@@ -2,6 +2,7 @@ mod admin;
 mod api_keys;
 mod device;
 mod federation;
+mod identity;
 mod idp_config;
 mod magic_link;
 mod mfa;

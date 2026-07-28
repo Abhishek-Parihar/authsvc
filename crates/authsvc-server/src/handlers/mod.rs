@@ -7,6 +7,7 @@ use authsvc_core::AuthError;
 use serde_json::json;
 
 pub mod admin;
+pub mod admin_session;
 pub mod auth;
 pub mod compliance;
 pub mod device;

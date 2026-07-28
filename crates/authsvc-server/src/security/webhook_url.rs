@@ -1,5 +1,6 @@
 use authsvc_core::AuthError;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+use super::host::{is_blocked_host, validate_resolved_host};
 
 /// Reject webhook targets that could reach internal infrastructure (SSRF mitigation).
 pub fn validate_webhook_url(url: &str, require_https: bool) -> Result<(), AuthError> {
@@ -30,48 +31,14 @@ pub fn validate_webhook_url(url: &str, require_https: bool) -> Result<(), AuthEr
         ));
     }
 
+    let port = parsed.port_or_known_default().unwrap_or(if scheme == "https" {
+        443
+    } else {
+        80
+    });
+    validate_resolved_host(host, port)?;
+
     Ok(())
-}
-
-fn is_blocked_host(host: &str) -> bool {
-    let lower = host.to_ascii_lowercase();
-    if matches!(
-        lower.as_str(),
-        "localhost"
-            | "localhost.localdomain"
-            | "metadata.google.internal"
-            | "metadata"
-    ) {
-        return true;
-    }
-    if lower.ends_with(".local") || lower.ends_with(".internal") {
-        return true;
-    }
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        return is_blocked_ip(ip);
-    }
-    false
-}
-
-fn is_blocked_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            v4.is_private()
-                || v4.is_loopback()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.octets()[0] == 0
-                || v4 == Ipv4Addr::new(169, 254, 169, 254)
-                || v4 == Ipv4Addr::new(100, 64, 0, 0) // shared CGNAT range start heuristic
-        }
-        IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.segments()[0] & 0xffc0 == 0xfe80 // link-local
-                || v6 == Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0xa9fe, 0xa9fe)
-        }
-    }
 }
 
 #[cfg(test)]

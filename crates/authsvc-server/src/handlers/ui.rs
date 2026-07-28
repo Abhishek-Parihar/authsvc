@@ -131,62 +131,139 @@ pub fn admin_html(issuer: &str) -> String {
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>authsvc Admin</title>
 <style>
-*{{box-sizing:border-box}}body{{font-family:system-ui,sans-serif;margin:0;background:#0f172a;color:#e2e8f0;min-height:100vh}}
-header{{padding:1rem 2rem;border-bottom:1px solid #334155;display:flex;justify-content:space-between;align-items:center}}
-main{{padding:2rem;max-width:1100px;margin:0 auto}}
-.card{{background:#1e293b;padding:1.5rem;border-radius:12px;margin-bottom:1rem}}
-input,button,textarea{{padding:.5rem .75rem;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;margin-right:.5rem;margin-bottom:.5rem}}
-button{{background:#3b82f6;border:none;cursor:pointer;color:#fff}}
+:root{{--bg:#0f172a;--surface:#1e293b;--border:#334155;--text:#e2e8f0;--muted:#94a3b8;--accent:#3b82f6;--accent-hover:#2563eb;--danger:#ef4444;--ok:#22c55e}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex}}
+nav{{width:220px;background:var(--surface);border-right:1px solid var(--border);padding:1.25rem 0;flex-shrink:0}}
+nav .brand{{padding:0 1.25rem 1.25rem;font-weight:700;font-size:1.1rem;border-bottom:1px solid var(--border);margin-bottom:.5rem}}
+nav a{{display:block;padding:.6rem 1.25rem;color:var(--muted);text-decoration:none;cursor:pointer;font-size:.9rem}}
+nav a:hover,nav a.active{{color:var(--text);background:rgba(59,130,246,.12)}}
+nav a.active{{border-right:2px solid var(--accent)}}
+.content{{flex:1;display:flex;flex-direction:column;min-width:0}}
+header{{padding:1rem 1.5rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--surface)}}
+header .status{{font-size:.85rem;padding:.25rem .75rem;border-radius:999px;background:var(--bg);color:var(--muted)}}
+header .status.ok{{color:var(--ok)}}
+main{{padding:1.5rem;overflow:auto;flex:1}}
+.panel{{display:none}}.panel.active{{display:block}}
+.card{{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.25rem;margin-bottom:1rem}}
+.card h2{{font-size:1rem;margin-bottom:.75rem}}
+.card p.hint{{color:var(--muted);font-size:.85rem;margin-bottom:1rem}}
+input,button,select{{padding:.5rem .75rem;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:.875rem}}
+button{{background:var(--accent);border:none;color:#fff;cursor:pointer;font-weight:500}}
+button:hover{{background:var(--accent-hover)}}
+button.secondary{{background:transparent;border:1px solid var(--border);color:var(--text)}}
+button.danger{{background:var(--danger)}}
+.row{{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:.75rem}}
 table{{width:100%;border-collapse:collapse;font-size:.85rem}}
-th,td{{text-align:left;padding:.5rem;border-bottom:1px solid #334155}}
-pre{{background:#0f172a;padding:1rem;border-radius:8px;overflow:auto;font-size:.8rem;max-height:320px}}
-.grid{{display:grid;grid-template-columns:1fr 1fr;gap:1rem}}
-@media(max-width:800px){{.grid{{grid-template-columns:1fr}}}}
+th{{text-align:left;padding:.6rem .5rem;color:var(--muted);font-weight:500;border-bottom:1px solid var(--border)}}
+td{{padding:.6rem .5rem;border-bottom:1px solid var(--border);word-break:break-all}}
+.empty{{color:var(--muted);padding:1rem;text-align:center;font-size:.9rem}}
+#toast{{position:fixed;bottom:1.5rem;right:1.5rem;padding:.75rem 1.25rem;border-radius:8px;background:var(--surface);border:1px solid var(--border);display:none;z-index:99;font-size:.875rem}}
+#toast.err{{border-color:var(--danger);color:#fca5a5}}
+#toast.ok{{border-color:var(--ok);color:#86efac}}
+.stats{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem;margin-bottom:1rem}}
+.stat{{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1rem}}
+.stat .label{{color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.05em}}
+.stat .value{{font-size:1.5rem;font-weight:700;margin-top:.25rem}}
+pre.raw{{background:var(--bg);padding:1rem;border-radius:8px;overflow:auto;font-size:.75rem;max-height:240px}}
+@media(max-width:768px){{nav{{display:none}}body{{flex-direction:column}}}}
 </style></head><body>
-<header><strong>authsvc Admin</strong><span id="status">Not connected</span></header>
+<nav>
+<div class="brand">authsvc</div>
+<a class="active" data-panel="dashboard" onclick="showPanel('dashboard',this)">Dashboard</a>
+<a data-panel="users" onclick="showPanel('users',this)">Users</a>
+<a data-panel="audit" onclick="showPanel('audit',this)">Audit log</a>
+<a data-panel="saml" onclick="showPanel('saml',this)">SAML IdP</a>
+<a data-panel="settings" onclick="showPanel('settings',this)">Settings</a>
+</nav>
+<div class="content">
+<header>
+<span>Admin Console</span>
+<span class="status" id="status">Not connected</span>
+</header>
 <main>
-<div class="card"><h2>Connect</h2>
-<input id="token" type="password" placeholder="Bootstrap secret or admin JWT" style="width:320px">
-<button onclick="saveToken()">Save</button></div>
-<div class="grid">
+<section id="panel-dashboard" class="panel active">
+<div class="stats">
+<div class="stat"><div class="label">Users</div><div class="value" id="statUsers">—</div></div>
+<div class="stat"><div class="label">Clients</div><div class="value" id="statClients">—</div></div>
+<div class="stat"><div class="label">SAML SPs</div><div class="value" id="statSps">—</div></div>
+<div class="stat"><div class="label">Audit events</div><div class="value" id="statAudit">—</div></div>
+</div>
+<div class="card"><h2>Quick actions</h2>
+<div class="row">
+<button onclick="loadDashboard()">Refresh</button>
+<button class="secondary" onclick="compliance()">Compliance status</button>
+<button class="secondary" onclick="rotateKeys()">Rotate JWT keys</button>
+</div>
+<pre class="raw" id="dashOut">Connect with your bootstrap secret or admin JWT in Settings.</pre>
+</div>
+</section>
+<section id="panel-users" class="panel">
 <div class="card"><h2>User search</h2>
-<input id="userQ" placeholder="email prefix" style="width:200px">
+<div class="row">
+<input id="userQ" placeholder="Search by email prefix…" style="flex:1;min-width:200px">
 <button onclick="searchUsers()">Search</button>
-<pre id="usersOut"></pre></div>
+</div>
+<table id="usersTable"><thead><tr><th>Email</th><th>Name</th><th>Status</th><th>Created</th></tr></thead><tbody><tr><td colspan="4" class="empty">Search to find users</td></tr></tbody></table>
+</div>
+</section>
+<section id="panel-audit" class="panel">
 <div class="card"><h2>Audit log</h2>
-<button onclick="loadAudit()">Refresh</button>
-<pre id="auditOut"></pre></div>
+<div class="row"><button onclick="loadAudit()">Refresh</button></div>
+<table id="auditTable"><thead><tr><th>Time</th><th>Action</th><th>Resource</th><th>Actor</th></tr></thead><tbody><tr><td colspan="4" class="empty">No events loaded</td></tr></tbody></table>
 </div>
+</section>
+<section id="panel-saml" class="panel">
 <div class="card"><h2>SAML service providers</h2>
-<p style="color:#94a3b8;font-size:.9rem">Register relying parties for SAML IdP mode. IdP metadata: <code>{issuer}/saml/idp/metadata</code></p>
-<input id="spName" placeholder="Name" style="width:140px">
-<input id="spEntity" placeholder="Entity ID" style="width:220px">
-<input id="spAcs" placeholder="ACS URL" style="width:280px">
-<label><input type="checkbox" id="spSigned"> Require signed AuthnRequests</label>
+<p class="hint">IdP metadata: <code>{issuer}/saml/idp/metadata</code></p>
+<div class="row">
+<input id="spName" placeholder="Name" style="width:120px">
+<input id="spEntity" placeholder="Entity ID" style="flex:1;min-width:180px">
+<input id="spAcs" placeholder="ACS URL" style="flex:1;min-width:200px">
+<label style="font-size:.85rem;color:var(--muted)"><input type="checkbox" id="spSigned"> Signed requests</label>
 <button onclick="createSp()">Add SP</button>
-<button onclick="listSps()">Refresh list</button>
-<table id="spTable"><thead><tr><th>Name</th><th>Entity ID</th><th>ACS</th><th></th></tr></thead><tbody></tbody></table>
 </div>
-<div class="card"><h2>Actions</h2>
-<button onclick="compliance()">Compliance status</button>
-<button onclick="listClients()">List clients</button>
-<button onclick="rotateKeys()">Rotate JWT keys</button>
-<pre id="out">Results appear here</pre></div>
+<table id="spTable"><thead><tr><th>Name</th><th>Entity ID</th><th>ACS URL</th><th></th></tr></thead><tbody><tr><td colspan="4" class="empty">No service providers</td></tr></tbody></table>
+</div>
+</section>
+<section id="panel-settings" class="panel">
+<div class="card"><h2>Authentication</h2>
+<div class="row">
+<input id="token" type="password" placeholder="Bootstrap secret or admin JWT" style="flex:1;min-width:280px">
+<button onclick="saveToken()">Save token</button>
+</div>
+<p class="hint">Session stored in an httpOnly cookie (8h TTL). Token is never saved in localStorage.</p>
+<div class="row"><button class="secondary" onclick="logout()">Sign out</button></div>
+</div>
+<div class="card"><h2>API output</h2>
+<pre class="raw" id="out">Results appear here</pre>
+</div>
+</section>
 </main>
+</div>
+<div id="toast"></div>
 <script>
 const ISS='{issuer}';
-function hdr(){{const t=localStorage.getItem('authsvc_admin');return t?{{Authorization:'Bearer '+t}}:{{}}}}
-function saveToken(){{localStorage.setItem('authsvc_admin',document.getElementById('token').value);document.getElementById('status').textContent='Connected'}}
-async function compliance(){{const r=await fetch(ISS+'/v1/compliance/status',{{headers:hdr()}});out(await r.json())}}
-async function listClients(){{const r=await fetch(ISS+'/v1/clients',{{headers:hdr()}});out(await r.json())}}
-async function rotateKeys(){{const r=await fetch(ISS+'/v1/keys/rotate',{{method:'POST',headers:hdr()}});out(await r.json())}}
-async function searchUsers(){{const q=document.getElementById('userQ').value;const r=await fetch(ISS+'/v1/users?email='+encodeURIComponent(q),{{headers:hdr()}});document.getElementById('usersOut').textContent=JSON.stringify(await r.json(),null,2)}}
-async function loadAudit(){{const r=await fetch(ISS+'/v1/audit/events?limit=50',{{headers:hdr()}});document.getElementById('auditOut').textContent=JSON.stringify(await r.json(),null,2)}}
-async function listSps(){{const r=await fetch(ISS+'/v1/saml/service-providers',{{headers:hdr()}});const j=await r.json();const tb=document.querySelector('#spTable tbody');tb.innerHTML='';(j.service_providers||[]).forEach(sp=>{{const tr=document.createElement('tr');tr.innerHTML=`<td>${{sp.name}}</td><td>${{sp.entity_id}}</td><td>${{sp.acs_url}}</td><td><button onclick="delSp('${{sp.id}}')">Delete</button></td>`;tb.appendChild(tr)}})}}
-async function createSp(){{const body={{name:document.getElementById('spName').value,entity_id:document.getElementById('spEntity').value,acs_url:document.getElementById('spAcs').value,want_authn_requests_signed:document.getElementById('spSigned').checked}};const r=await fetch(ISS+'/v1/saml/service-providers',{{method:'POST',headers:{{...hdr(),'Content-Type':'application/json'}},body:JSON.stringify(body)}});out(await r.json());listSps()}}
-async function delSp(id){{await fetch(ISS+'/v1/saml/service-providers/'+id,{{method:'DELETE',headers:hdr()}});listSps()}}
-function out(d){{document.getElementById('out').textContent=JSON.stringify(d,null,2)}}
-if(localStorage.getItem('authsvc_admin'))document.getElementById('status').textContent='Connected';
+const FETCH_OPTS={{credentials:'include'}};
+function hdr(){{return{{}}}}
+async function connected(){{try{{const j=await fetch(ISS+'/admin/session',FETCH_OPTS).then(r=>r.json());return j.connected}}catch{{return false}}}}
+function setStatus(ok){{const el=document.getElementById('status');el.textContent=ok?'Connected':'Not connected';el.className='status'+(ok?' ok':'')}}
+function toast(msg,err){{const t=document.getElementById('toast');t.textContent=msg;t.className=err?'err':'ok';t.style.display='block';setTimeout(()=>t.style.display='none',3500)}}
+function showPanel(id,el){{document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));document.getElementById('panel-'+id).classList.add('active');document.querySelectorAll('nav a').forEach(a=>a.classList.remove('active'));el.classList.add('active');if(id==='audit')loadAudit();if(id==='saml')listSps();if(id==='dashboard')loadDashboard()}}
+async function saveToken(){{try{{const token=document.getElementById('token').value;const r=await fetch(ISS+'/admin/session',{{...FETCH_OPTS,method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{token}})}});if(!r.ok)throw new Error('Invalid token');setStatus(true);toast('Signed in');loadDashboard()}}catch(e){{toast(e.message||'Sign in failed',1)}}}}
+async function logout(){{await fetch(ISS+'/admin/session',{{...FETCH_OPTS,method:'DELETE'}});setStatus(false);toast('Signed out')}}
+function out(d){{document.getElementById('out').textContent=typeof d==='string'?d:JSON.stringify(d,null,2)}}
+async function api(path,opts={{}}){{const r=await fetch(ISS+path,{{...FETCH_OPTS,...opts,headers:{{...hdr(),...(opts.headers||{{}})}}}});const t=await r.text();let j;try{{j=JSON.parse(t)}}catch{{j={{raw:t}}}};if(!r.ok)throw new Error(j.error_description||j.error||r.statusText);return j}}
+async function compliance(){{try{{out(await api('/v1/compliance/status'))}}catch(e){{toast(e.message,1)}}}}
+async function rotateKeys(){{try{{out(await api('/v1/keys/rotate',{{method:'POST'}}));toast('Keys rotated')}}catch(e){{toast(e.message,1)}}}}
+async function searchUsers(){{const q=document.getElementById('userQ').value;if(q.length<2){{toast('Enter at least 2 characters',1);return}}try{{const j=await api('/v1/users?email='+encodeURIComponent(q));const tb=document.querySelector('#usersTable tbody');const users=j.users||[];if(!users.length){{tb.innerHTML='<tr><td colspan="4" class="empty">No users found</td></tr>';return}}tb.innerHTML=users.map(u=>`<tr><td>${{esc(u.email)}}</td><td>${{esc(u.display_name||'—')}}</td><td>${{esc(u.status)}}</td><td>${{esc((u.created_at||'').slice(0,19))}}</td></tr>`).join('');document.getElementById('statUsers').textContent=users.length}}catch(e){{toast(e.message,1)}}}}
+async function loadAudit(){{try{{const j=await api('/v1/audit/events?limit=50');const events=j.events||[];const tb=document.querySelector('#auditTable tbody');if(!events.length){{tb.innerHTML='<tr><td colspan="4" class="empty">No audit events</td></tr>';return}}tb.innerHTML=events.map(e=>`<tr><td>${{esc((e.created_at||'').slice(0,19))}}</td><td>${{esc(e.action)}}</td><td>${{esc(e.resource||'—')}}</td><td>${{esc(e.actor_id||'—')}}</td></tr>`).join('');document.getElementById('statAudit').textContent=events.length}}catch(e){{toast(e.message,1)}}}}
+async function listSps(){{try{{const j=await api('/v1/saml/service-providers');const sps=j.service_providers||[];const tb=document.querySelector('#spTable tbody');if(!sps.length){{tb.innerHTML='<tr><td colspan="4" class="empty">No service providers</td></tr>';document.getElementById('statSps').textContent='0';return}}tb.innerHTML=sps.map(sp=>`<tr><td>${{esc(sp.name)}}</td><td>${{esc(sp.entity_id)}}</td><td>${{esc(sp.acs_url)}}</td><td><button class="danger" onclick="delSp('${{sp.id}}')">Delete</button></td></tr>`).join('');document.getElementById('statSps').textContent=sps.length}}catch(e){{toast(e.message,1)}}}}
+async function createSp(){{try{{const body={{name:document.getElementById('spName').value,entity_id:document.getElementById('spEntity').value,acs_url:document.getElementById('spAcs').value,want_authn_requests_signed:document.getElementById('spSigned').checked}};out(await api('/v1/saml/service-providers',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}}));toast('Service provider added');listSps()}}catch(e){{toast(e.message,1)}}}}
+async function delSp(id){{try{{await api('/v1/saml/service-providers/'+id,{{method:'DELETE'}});toast('Deleted');listSps()}}catch(e){{toast(e.message,1)}}}}
+async function loadDashboard(){{if(!await connected())return;try{{const clients=await api('/v1/clients');document.getElementById('statClients').textContent=(clients.clients||[]).length;await listSps();await loadAudit()}}catch(e){{/* not connected yet */}}}}
+function esc(s){{return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}}
+connected().then(ok=>{{if(ok){{setStatus(true);loadDashboard()}}}});
 </script></body></html>"#
     )
 }

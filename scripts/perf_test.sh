@@ -9,6 +9,50 @@ BASE_URL="http://127.0.0.1:${PORT}"
 DURATION="${DURATION:-15s}"
 CONCURRENCY="${CONCURRENCY:-50}"
 REQUESTS="${REQUESTS:-5000}"
+ENFORCE_SLO="${ENFORCE_SLO:-0}"
+SLO_MODE="${SLO_MODE:-local}"
+
+# Minimum RPS per endpoint (local = dev hardware, ci = GitHub Actions)
+declare -A SLO_RPS
+if [[ "$SLO_MODE" == "ci" ]]; then
+  SLO_RPS=(
+    ["Health (liveness)"]=500
+    ["JWKS"]=200
+    ["Token (password grant)"]=30
+    ["Token (refresh grant)"]=50
+    ["Authz check"]=100
+    ["Userinfo (authenticated)"]=50
+  )
+  declare -A SLO_P99_MS
+  SLO_P99_MS=(
+    ["Health (liveness)"]=50
+    ["JWKS"]=100
+    ["Token (password grant)"]=2000
+    ["Token (refresh grant)"]=1000
+    ["Authz check"]=200
+    ["Userinfo (authenticated)"]=300
+  )
+else
+  SLO_RPS=(
+    ["Health (liveness)"]=2000
+    ["JWKS"]=1000
+    ["Token (password grant)"]=100
+    ["Token (refresh grant)"]=200
+    ["Authz check"]=500
+    ["Userinfo (authenticated)"]=300
+  )
+  declare -A SLO_P99_MS
+  SLO_P99_MS=(
+    ["Health (liveness)"]=10
+    ["JWKS"]=15
+    ["Token (password grant)"]=500
+    ["Token (refresh grant)"]=200
+    ["Authz check"]=50
+    ["Userinfo (authenticated)"]=30
+  )
+fi
+
+SLO_FAILURES=0
 
 echo "==> Starting Postgres + Redis (Homebrew)"
 "$ROOT/scripts/brew_services.sh" up
@@ -66,6 +110,36 @@ REFRESH_TOKEN=$(echo "$TOKEN_JSON" | python3 -c 'import json,sys; print(json.loa
 USER_ID=$(echo "$ACCESS_TOKEN" | python3 -c 'import sys,base64,json; p=sys.stdin.read().strip().split(".")[1]; p+="="*((4-len(p)%4)%4); print(json.loads(base64.urlsafe_b64decode(p))["sub"])')
 ACCOUNT_ID=$(echo "$ACCESS_TOKEN" | python3 -c 'import sys,base64,json; p=sys.stdin.read().strip().split(".")[1]; p+="="*((4-len(p)%4)%4); print(json.loads(base64.urlsafe_b64decode(p))["account_id"])')
 
+check_slo_latency() {
+  local name="$1"
+  local p99_ms="$2"
+  local max="${SLO_P99_MS[$name]:-0}"
+  if [[ "$max" -eq 0 ]] || [[ -z "$p99_ms" ]] || [[ "$p99_ms" == "0" ]]; then
+    return
+  fi
+  if python3 -c "import sys; sys.exit(0 if float('$p99_ms') <= $max else 1)"; then
+    echo "  p99 OK: ${p99_ms}ms <= ${max}ms"
+  else
+    echo "  p99 FAIL: ${p99_ms}ms > ${max}ms"
+    SLO_FAILURES=$((SLO_FAILURES + 1))
+  fi
+}
+
+check_slo() {
+  local name="$1"
+  local rps="$2"
+  local min="${SLO_RPS[$name]:-0}"
+  if [[ "$min" -eq 0 ]]; then
+    return
+  fi
+  if python3 -c "import sys; sys.exit(0 if float('$rps') >= $min else 1)"; then
+    echo "  SLO OK: ${rps} RPS >= ${min} (target)"
+  else
+    echo "  SLO FAIL: ${rps} RPS < ${min} (target)"
+    SLO_FAILURES=$((SLO_FAILURES + 1))
+  fi
+}
+
 run_load() {
   local name="$1"
   local url="$2"
@@ -76,28 +150,42 @@ run_load() {
   echo ""
   echo "=== $name ==="
 
+  local measured_rps="0"
+
   if command -v hey >/dev/null 2>&1; then
+    local hey_out
     if [[ "$method" == "POST" && -n "$body" ]]; then
       if [[ -n "$auth_header" ]]; then
-        hey -z "$DURATION" -c "$CONCURRENCY" -m POST \
+        hey_out=$(hey -z "$DURATION" -c "$CONCURRENCY" -m POST \
           -H 'Content-Type: application/json' \
           -H "Authorization: $auth_header" \
           -d "$body" \
-          "$url"
+          "$url" 2>&1) || true
       else
-        hey -z "$DURATION" -c "$CONCURRENCY" -m POST \
+        hey_out=$(hey -z "$DURATION" -c "$CONCURRENCY" -m POST \
           -H 'Content-Type: application/json' \
           -d "$body" \
-          "$url"
+          "$url" 2>&1) || true
       fi
     elif [[ -n "$auth_header" ]]; then
-      hey -z "$DURATION" -c "$CONCURRENCY" -H "Authorization: $auth_header" "$url"
+      hey_out=$(hey -z "$DURATION" -c "$CONCURRENCY" -H "Authorization: $auth_header" "$url" 2>&1) || true
     else
-      hey -z "$DURATION" -c "$CONCURRENCY" "$url"
+      hey_out=$(hey -z "$DURATION" -c "$CONCURRENCY" "$url" 2>&1) || true
+    fi
+    echo "$hey_out"
+    measured_rps=$(echo "$hey_out" | awk '/Requests\/sec:/ {print $2; exit}')
+    [[ -z "$measured_rps" ]] && measured_rps="0"
+    local p99_sec
+    p99_sec=$(echo "$hey_out" | awk '/99%/ {print $(NF-1); exit}')
+    if [[ -n "$p99_sec" ]]; then
+      local p99_ms
+      p99_ms=$(python3 -c "print(round(float('$p99_sec') * 1000, 2))")
+      check_slo_latency "$name" "$p99_ms"
     fi
   else
     echo "(hey not installed — using curl loop fallback)"
-    local ok=0 fail=0 start=$(date +%s)
+    local ok=0 fail=0 start end elapsed
+    start=$(date +%s%N)
     for ((i=0; i<REQUESTS; i++)); do
       if [[ "$method" == "POST" ]]; then
         if curl -sf -X POST -H 'Content-Type: application/json' -d "$body" "$url" >/dev/null; then
@@ -119,11 +207,14 @@ run_load() {
         fi
       fi
     done
-    local end=$(date +%s)
-    local elapsed=$((end-start))
-    [[ "$elapsed" -lt 1 ]] && elapsed=1
-    echo "requests=$REQUESTS ok=$ok fail=$fail elapsed=${elapsed}s rps=$((REQUESTS/elapsed))"
+    end=$(date +%s%N)
+    elapsed=$(( (end - start) / 1000000 ))
+    [[ "$elapsed" -lt 1 ]] && elapsed=1000
+    measured_rps=$(python3 -c "print(round($REQUESTS / ($elapsed / 1000), 2))")
+    echo "requests=$REQUESTS ok=$ok fail=$fail elapsed_ms=${elapsed} rps=${measured_rps}"
   fi
+
+  check_slo "$name" "$measured_rps"
 }
 
 run_load "Health (liveness)" "$BASE_URL/health"
@@ -137,10 +228,15 @@ run_load "Authz check" "$BASE_URL/v1/authz/check" POST \
 run_load "Userinfo (authenticated)" "$BASE_URL/oauth/userinfo" GET "" "Bearer $ACCESS_TOKEN"
 
 echo ""
-echo "=== Baseline targets (single node, dev hardware) ==="
-echo "  login RPS:        > 100"
-echo "  refresh RPS:      > 200"
-echo "  authz check RPS:  > 500"
+echo "=== SLO summary (mode=$SLO_MODE, enforce=$ENFORCE_SLO) ==="
+if [[ "$SLO_FAILURES" -gt 0 ]]; then
+  echo "FAILED: $SLO_FAILURES endpoint(s) below minimum RPS"
+  if [[ "$ENFORCE_SLO" == "1" ]]; then
+    exit 1
+  fi
+else
+  echo "PASSED: all endpoints met minimum RPS targets"
+fi
 
 echo ""
 echo "=== Prometheus metrics snapshot ==="

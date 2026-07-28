@@ -150,11 +150,14 @@ pub async fn verify_user_password(
         }
     }
 
-    let hash = user
-        .password_hash
-        .as_deref()
-        .ok_or(AuthError::InvalidCredentials)?;
-    if !verify_password(password, hash)? {
+    let hash = if let Some(cred) = state.repos.postgres().find_password_hash(user.id).await? {
+        cred
+    } else {
+        user.password_hash
+            .clone()
+            .ok_or(AuthError::InvalidCredentials)?
+    };
+    if !verify_password(password, &hash)? {
         state.record_failed_login(email, user.id).await?;
         state
             .audit(

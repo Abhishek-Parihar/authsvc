@@ -223,3 +223,46 @@ async fn webhook_rejects_localhost_target() {
         .expect("webhook");
     assert_eq!(resp.status(), 400);
 }
+
+#[tokio::test]
+#[serial]
+async fn admin_session_cookie_auth() {
+    let Some((db_url, redis_url)) = test_urls().await else {
+        eprintln!("SKIP: no database");
+        return;
+    };
+    let (addr, _server) = spawn_server(db_url, redis_url).await;
+    let base = format!("http://{addr}");
+    let client = Client::builder()
+        .cookie_store(true)
+        .build()
+        .expect("client");
+
+    let denied = client
+        .get(format!("{base}/v1/clients"))
+        .send()
+        .await
+        .expect("clients");
+    assert_eq!(denied.status(), 401);
+
+    let session = client
+        .post(format!("{base}/admin/session"))
+        .json(&json!({"token": "test-bootstrap-secret"}))
+        .send()
+        .await
+        .expect("session");
+    assert_eq!(session.status(), 204);
+
+    let allowed = client
+        .get(format!("{base}/v1/clients"))
+        .send()
+        .await
+        .expect("clients authed");
+    assert!(allowed.status().is_success());
+
+    client
+        .delete(format!("{base}/admin/session"))
+        .send()
+        .await
+        .expect("logout");
+}

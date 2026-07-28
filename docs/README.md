@@ -8,17 +8,19 @@
 
 ## Deployment
 
+- [operator-day1.md](operator-day1.md) — end-to-end day-1 production checklist
 - [deploy-production.md](deploy-production.md) — production secrets, DB roles, JWT keys
 - [helm-deployment.md](helm-deployment.md) — Kubernetes / Helm guide
 - [observability.md](observability.md) — Prometheus metrics and OpenTelemetry
 
 ## Authentication & federation
 
-- [SAML.md](SAML.md) — SAML 2.0 Service Provider setup
+- [SAML.md](SAML.md) — SAML 2.0 SP and IdP setup
 
 ## Security & compliance
 
 - [security-whitepaper.md](security-whitepaper.md) — architecture and security controls
+- [security-assessment-checklist.md](security-assessment-checklist.md) — pre-audit self-assessment
 - [soc2-control-mapping.md](soc2-control-mapping.md) — control mapping reference
 - [SECURITY.md](../SECURITY.md) — vulnerability reporting
 
@@ -27,6 +29,7 @@
 - [runbooks/key-compromise.md](runbooks/key-compromise.md) — JWT signing key compromise
 - [runbooks/account-lockdown.md](runbooks/account-lockdown.md) — account lockdown procedures
 - [runbooks/data-breach.md](runbooks/data-breach.md) — data breach response
+- [runbooks/notifications-production.md](runbooks/notifications-production.md) — email/SMS production setup
 
 ## Performance
 

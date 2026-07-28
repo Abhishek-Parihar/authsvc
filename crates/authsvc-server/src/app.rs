@@ -47,6 +47,7 @@ use crate::{
         scim::{create_user as scim_create_user, delete_user as scim_delete_user, get_group as scim_get_group, get_user as scim_get_user, list_groups as scim_list_groups, list_users as scim_list_users, patch_group as scim_patch_group, patch_user as scim_patch_user},
         sessions::{list_sessions, revoke_all_sessions, revoke_session},
         ui::{admin_page, login_page},
+        admin_session::{create_session as admin_create_session, delete_session as admin_delete_session, session_status as admin_session_status},
         webauthn::{login_begin, login_finish, register_begin, register_finish},
         SharedState,
     },
@@ -187,6 +188,7 @@ pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometh
         .route("/oauth/device_authorization", post(device_authorization))
         .route("/login", get(login_page))
         .route("/admin", get(admin_page))
+        .route("/admin/session", post(admin_create_session).delete(admin_delete_session).get(admin_session_status))
         .route("/device", get(device_page))
         .route("/device/approve", axum::routing::post(device_approve))
         .route("/oauth/mfa", post(complete_mfa))

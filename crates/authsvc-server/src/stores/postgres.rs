@@ -465,18 +465,26 @@ impl UserRepository for PostgresStore {
         .await;
 
         match result {
-            Ok(_) => Ok(User {
-                id,
-                email: user.email.clone(),
-                password_hash: Some(password_hash.to_string()),
-                display_name: user.display_name.clone(),
-                email_verified: false,
-                mfa_enabled: false,
-                status: "active".into(),
-                locked_until: None,
-                created_at: now,
-                updated_at: now,
-            }),
+            Ok(_) => {
+                let _ = self
+                    .insert_user_email(id, &user.email, false, true)
+                    .await;
+                let _ = self
+                    .insert_password_credential(id, &user.email, password_hash)
+                    .await;
+                Ok(User {
+                    id,
+                    email: user.email.clone(),
+                    password_hash: Some(password_hash.to_string()),
+                    display_name: user.display_name.clone(),
+                    email_verified: false,
+                    mfa_enabled: false,
+                    status: "active".into(),
+                    locked_until: None,
+                    created_at: now,
+                    updated_at: now,
+                })
+            }
             Err(sqlx::Error::Database(db)) if db.constraint().is_some() => {
                 Err(AuthError::UserAlreadyExists)
             }

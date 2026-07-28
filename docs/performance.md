@@ -29,7 +29,20 @@ Environment variables:
 
 ## CI regression guard
 
-The nightly workflow (`.github/workflows/nightly-perf.yml`) runs a shortened perf smoke test on `main`. Failures indicate >20% regression against stored baselines.
+The nightly workflow (`.github/workflows/nightly-perf.yml`) runs a shortened perf smoke test with **SLO enforcement** (`ENFORCE_SLO=1`, `SLO_MODE=ci`). The job fails if any endpoint drops below CI minimum RPS.
+
+Local enforcement:
+
+```bash
+ENFORCE_SLO=1 ./scripts/perf_test.sh
+```
+
+Environment variables:
+
+- `ENFORCE_SLO` — exit non-zero on SLO breach (default `0`)
+- `SLO_MODE` — `local` (dev hardware targets) or `ci` (GitHub Actions targets)
+
+Nightly CI installs `hey` and enforces both minimum RPS and p99 latency per endpoint.
 
 ## Tuning
 

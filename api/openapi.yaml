@@ -507,3 +507,98 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         "204": { description: Deleted }
+  /v1/users:
+    get:
+      summary: Search users by email prefix (admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: email, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: User search results }
+  /v1/audit/events:
+    get:
+      summary: List audit events (admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        "200": { description: Audit event list }
+  /v1/saml/service-providers:
+    get:
+      summary: List SAML IdP service providers (admin)
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: Service provider list }
+    post:
+      summary: Register SAML service provider (admin)
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: Service provider created }
+  /v1/saml/service-providers/{id}:
+    delete:
+      summary: Delete SAML service provider (admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Deleted }
+  /saml/idp/metadata:
+    get:
+      summary: SAML IdP metadata XML
+      responses:
+        "200": { description: IdP metadata }
+  /saml/idp/sso:
+    get:
+      summary: SAML IdP SSO (HTTP-Redirect)
+      responses:
+        "302": { description: Redirect to login }
+    post:
+      summary: SAML IdP SSO (HTTP-POST)
+      responses:
+        "302": { description: Redirect to login }
+  /saml/idp/login:
+    post:
+      summary: Complete SAML IdP login after hosted UI
+      responses:
+        "200": { description: POST binding HTML with SAMLResponse }
+  /admin/session:
+    post:
+      summary: Create admin console session (httpOnly cookie)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "204": { description: Session created }
+    get:
+      summary: Admin session status
+      responses:
+        "200": { description: Session status }
+    delete:
+      summary: Destroy admin session
+      responses:
+        "204": { description: Session cleared }
+  /oauth/device_authorization:
+    post:
+      summary: RFC 8628 device authorization
+      responses:
+        "200": { description: Device code issued }
+  /login:
+    get:
+      summary: Hosted login page
+      responses:
+        "200": { description: HTML login form }
+  /admin:
+    get:
+      summary: Admin console
+      responses:
+        "200": { description: HTML admin UI }
