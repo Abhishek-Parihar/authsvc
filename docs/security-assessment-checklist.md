@@ -66,6 +66,10 @@ Self-assessment checklist for security reviews, vendor questionnaires, and pre-a
 | Security headers (CSP, HSTS) | ✅ | `middleware/security.rs` |
 | Rate limiting (Redis) per-endpoint + per-IP | ✅ | `middleware/rate_limit.rs`, `middleware/ip_rate_limit.rs` |
 | Rate limit HTTP 429 + Retry-After | ✅ | `handlers/mod.rs`, `AuthError::RateLimited` |
+| Device approve CSRF + rate limits | ✅ | `device_flow.rs`, `handlers/device.rs` |
+| Outbound HTTP timeouts (webhooks, SIEM, KMS) | ✅ | `http_client.rs` |
+| Custom URI redirects blocked in prod by default | ✅ | `ALLOW_CUSTOM_SCHEME_REDIRECTS` |
+| JWT permissions revoked on role change | ✅ | `services/admin.rs` |
 | Per-account rate limit override | ✅ | `accounts.rate_limit_override`, `middleware/auth.rs` |
 | Graceful shutdown | ✅ | `main.rs` |
 | Container image scanning (Trivy) | ✅ | `.github/workflows/ci.yml` |
@@ -93,7 +97,7 @@ Self-assessment checklist for security reviews, vendor questionnaires, and pre-a
 |-----|-----------------|
 | No third-party pen-test report | Schedule annual pen-test; attach report here |
 | No formal SOC 2 Type II | Use control mapping; engage auditor when ready |
-| Custom URI scheme redirects not DNS-checked | Accept risk for native apps; document in client onboarding |
+| Native app deep links need `ALLOW_CUSTOM_SCHEME_REDIRECTS=true` | Document in client onboarding; default blocked in prod |
 | Password grant in dev only | Disabled in production via `DISABLE_PASSWORD_GRANT`; omitted from OIDC discovery |
 
 ## Review cadence

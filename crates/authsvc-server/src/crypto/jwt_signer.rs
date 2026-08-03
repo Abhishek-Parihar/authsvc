@@ -45,7 +45,7 @@ fn sign_local_rs256(private_pem: &str, signing_input: &[u8]) -> Result<Vec<u8>, 
 }
 
 fn sign_kms_rs256(url: &str, key_id: Option<&str>, signing_input: &[u8]) -> Result<Vec<u8>, AuthError> {
-    let client = reqwest::blocking::Client::new();
+    let client = crate::http_client::outbound_blocking_client();
     let resp = client
         .post(format!("{url}/sign"))
         .json(&serde_json::json!({

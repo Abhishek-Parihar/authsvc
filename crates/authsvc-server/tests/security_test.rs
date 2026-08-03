@@ -497,3 +497,49 @@ async fn admin_session_cookie_auth() {
         .await
         .expect("logout");
 }
+
+#[tokio::test]
+#[serial]
+async fn device_approve_requires_csrf() {
+    let Some((db_url, redis_url)) = test_urls().await else {
+        eprintln!("SKIP: no database");
+        return;
+    };
+    let (addr, _server) = spawn_server(db_url, redis_url).await;
+    let base = format!("http://{addr}");
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{base}/device/approve"))
+        .form(&[
+            ("user_code", "ABCD-EFGH"),
+            ("email", "attacker@example.com"),
+            ("password", "wrong"),
+            ("csrf_token", "invalid-csrf"),
+        ])
+        .send()
+        .await
+        .expect("device approve");
+    assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
+#[serial]
+async fn logout_open_redirect_rejected() {
+    let Some((db_url, redis_url)) = test_urls().await else {
+        eprintln!("SKIP: no database");
+        return;
+    };
+    let (addr, _server) = spawn_server(db_url, redis_url).await;
+    let base = format!("http://{addr}");
+    let client = Client::new();
+
+    let resp = client
+        .get(format!(
+            "{base}/oauth/logout?post_logout_redirect_uri=https://evil.example/phish"
+        ))
+        .send()
+        .await
+        .expect("logout");
+    assert_eq!(resp.status(), 400);
+}

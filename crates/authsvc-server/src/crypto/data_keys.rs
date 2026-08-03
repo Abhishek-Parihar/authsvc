@@ -87,7 +87,7 @@ impl KmsDataKeyStore {
 impl DataKeyStore for KmsDataKeyStore {
     async fn encrypt(&self, plaintext: &[u8], context: &str) -> Result<Vec<u8>, AuthError> {
         if let Some(url) = &self.kms_url {
-            let client = reqwest::Client::new();
+            let client = crate::http_client::outbound_client();
             let resp = client
                 .post(format!("{url}/encrypt"))
                 .json(&serde_json::json!({
@@ -119,7 +119,7 @@ impl DataKeyStore for KmsDataKeyStore {
 
     async fn decrypt(&self, ciphertext: &[u8], context: &str) -> Result<Vec<u8>, AuthError> {
         if let Some(url) = &self.kms_url {
-            let client = reqwest::Client::new();
+            let client = crate::http_client::outbound_client();
             let resp = client
                 .post(format!("{url}/decrypt"))
                 .json(&serde_json::json!({

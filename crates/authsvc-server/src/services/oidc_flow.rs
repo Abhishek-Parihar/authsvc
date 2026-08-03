@@ -30,6 +30,7 @@ pub async fn start_authorization(
         &client,
         &params.redirect_uri,
         state.config.is_production(),
+        state.config.allow_custom_scheme_redirects,
     )?;
 
     let login_state = Uuid::new_v4().to_string();
@@ -240,6 +241,7 @@ pub async fn create_authorization_redirect(
         &client,
         redirect_uri,
         state.config.is_production(),
+        state.config.allow_custom_scheme_redirects,
     )?;
 
     let code = generate_refresh_token();

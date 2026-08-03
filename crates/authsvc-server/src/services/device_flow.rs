@@ -8,7 +8,31 @@ use super::{auth, state::AppState};
 use crate::crypto::password::{generate_refresh_token, hash_token};
 
 const DEVICE_CODE_TTL_SECS: i64 = 600;
+const DEVICE_CSRF_TTL_SECS: u64 = 900;
 const POLL_INTERVAL_SECS: u64 = 5;
+
+pub async fn create_device_csrf(state: &AppState) -> Result<String, AuthError> {
+    let token = generate_refresh_token();
+    state
+        .sessions
+        .set_json(
+            &format!("device_csrf:{token}"),
+            &"1",
+            DEVICE_CSRF_TTL_SECS,
+        )
+        .await?;
+    Ok(token)
+}
+
+pub async fn consume_device_csrf(state: &AppState, token: &str) -> Result<(), AuthError> {
+    let key = format!("device_csrf:{token}");
+    let present: Option<String> = state.sessions.get_json(&key).await?;
+    if present.is_none() {
+        return Err(AuthError::Forbidden);
+    }
+    state.sessions.delete_key(&key).await?;
+    Ok(())
+}
 
 #[derive(Debug, Serialize)]
 pub struct DeviceAuthorizationResponse {
@@ -71,8 +95,16 @@ pub async fn approve_device_code(
     user_code: &str,
     email: &str,
     password: &str,
+    csrf_token: &str,
     ip: Option<&str>,
 ) -> Result<(), AuthError> {
+    consume_device_csrf(state, csrf_token).await?;
+
+    state
+        .rate_limiter
+        .check(&format!("device_approve:{}", email.to_lowercase()))
+        .await?;
+
     let user = auth::verify_user_password(state, email, password, ip).await?;
     state
         .repos

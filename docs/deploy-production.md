@@ -43,6 +43,7 @@ Production options (in order of preference):
 | `JWT_KMS_KEY_ID` | No | Key identifier for remote JWT signing |
 | `JWT_PUBLIC_KEY_PEM` | Yes | JWKS publication |
 | `DISABLE_PASSWORD_GRANT` | Auto `true` when `ENV=production` | Disable resource-owner password grant |
+| `ALLOW_CUSTOM_SCHEME_REDIRECTS` | `false` in production | Set `true` only for native app deep-link redirects |
 
 ## Audit immutability
 

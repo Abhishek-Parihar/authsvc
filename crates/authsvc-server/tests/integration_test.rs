@@ -1108,12 +1108,29 @@ async fn device_authorization_grant_flow() {
         "authorization_pending"
     );
 
+    let page = client
+        .get(format!("{base}/device?user_code={user_code}"))
+        .send()
+        .await
+        .expect("device page")
+        .error_for_status()
+        .expect("device page status")
+        .text()
+        .await
+        .expect("device page html");
+    let csrf_token = page
+        .split("name=\"csrf_token\" value=\"")
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .expect("csrf_token in device page");
+
     client
         .post(format!("{base}/device/approve"))
         .form(&[
             ("user_code", user_code),
             ("email", &email),
             ("password", "test-password-123"),
+            ("csrf_token", csrf_token),
         ])
         .send()
         .await

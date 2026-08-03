@@ -65,7 +65,14 @@ pub async fn validate_admin_session(state: &AppState, session_id: &str) -> Resul
     let data = data.ok_or(AuthError::InvalidToken)?;
 
     match data.kind {
-        AdminSessionKind::Bootstrap => Ok(()),
+        AdminSessionKind::Bootstrap => {
+            if state.config.is_production()
+                && (!state.config.allow_bootstrap_secret || state.config.bootstrap_secret.is_none())
+            {
+                return Err(AuthError::Forbidden);
+            }
+            Ok(())
+        },
         AdminSessionKind::User { user_id } => {
             if user_has_admin_permission(state, user_id, data.account_id).await? {
                 Ok(())

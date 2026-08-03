@@ -6,8 +6,10 @@ use axum::{
 use serde::Deserialize;
 
 use crate::{
-    handlers::{ApiError, AppResult, SharedState},
-    services::device_flow::{approve_device_code, start_device_authorization},
+    handlers::{AppResult, SharedState},
+    services::device_flow::{
+        approve_device_code, create_device_csrf, start_device_authorization,
+    },
 };
 
 #[derive(Debug, Deserialize)]
@@ -39,9 +41,12 @@ pub struct DevicePageQuery {
 pub async fn device_page(
     State(state): State<SharedState>,
     Query(query): Query<DevicePageQuery>,
-) -> Html<String> {
+) -> AppResult<Html<String>> {
     let prefill = query.user_code.unwrap_or_default();
-    Html(crate::handlers::ui::device_html(&state.config.issuer, &prefill))
+    let csrf = create_device_csrf(&state).await?;
+    Ok(Html(
+        crate::handlers::ui::device_html(&state.config.issuer, &prefill, &csrf),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,6 +54,7 @@ pub struct DeviceApproveForm {
     pub user_code: String,
     pub email: String,
     pub password: String,
+    pub csrf_token: String,
 }
 
 pub async fn device_approve(
@@ -60,6 +66,7 @@ pub async fn device_approve(
         &body.user_code.to_uppercase(),
         &body.email,
         &body.password,
+        &body.csrf_token,
         None,
     )
     .await?;

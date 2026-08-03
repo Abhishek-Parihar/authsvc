@@ -191,7 +191,7 @@ impl AppState {
         }
 
         if let Some(url) = &self.config.audit_export_webhook {
-            let client = reqwest::Client::new();
+            let client = crate::http_client::outbound_client();
             let body = serde_json::json!({
                 "account_id": account_id,
                 "actor": actor,

@@ -81,6 +81,8 @@ pub struct Config {
     #[serde(default = "default_migrate_on_start")]
     pub migrate_on_start: bool,
     pub database_migrator_url: Option<String>,
+    #[serde(default)]
+    pub allow_custom_scheme_redirects: bool,
     pub metrics_bearer_token: Option<String>,
 }
 
@@ -195,6 +197,10 @@ impl Config {
         cfg.database_migrator_url = empty_as_none(cfg.database_migrator_url);
         cfg.metrics_bearer_token = empty_as_none(cfg.metrics_bearer_token);
 
+        if cfg.env != "production" && std::env::var("ALLOW_CUSTOM_SCHEME_REDIRECTS").is_err() {
+            cfg.allow_custom_scheme_redirects = true;
+        }
+
         if cfg.env == "production" {
             if cfg.jwt_public_key_pem.is_none() {
                 anyhow::bail!("JWT_PUBLIC_KEY_PEM required in production");
@@ -214,6 +220,10 @@ impl Config {
             }
             if cfg.metrics_bearer_token.is_none() {
                 anyhow::bail!("METRICS_BEARER_TOKEN required in production");
+            }
+            if let Some(url) = &cfg.audit_export_webhook {
+                crate::security::webhook_url::validate_webhook_url(url, true)
+                    .map_err(|e| anyhow::anyhow!("AUDIT_EXPORT_WEBHOOK invalid: {e}"))?;
             }
             if cfg.bootstrap_secret.is_some() && !cfg.allow_bootstrap_secret {
                 anyhow::bail!(

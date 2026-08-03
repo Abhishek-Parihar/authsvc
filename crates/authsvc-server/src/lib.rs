@@ -2,6 +2,7 @@ pub mod app;
 pub mod config;
 pub mod crypto;
 pub mod handlers;
+pub mod http_client;
 pub mod middleware;
 pub mod observability;
 pub mod security;

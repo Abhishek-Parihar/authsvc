@@ -21,6 +21,7 @@
 
 - [security-whitepaper.md](security-whitepaper.md) — architecture and security controls
 - [security-assessment-checklist.md](security-assessment-checklist.md) — pre-audit self-assessment
+- [pen-test-report-internal.md](pen-test-report-internal.md) — internal pen-test report (2026-08-03)
 - [soc2-control-mapping.md](soc2-control-mapping.md) — control mapping reference
 - [SECURITY.md](../SECURITY.md) — vulnerability reporting
 
@@ -31,6 +32,7 @@
 - [runbooks/data-breach.md](runbooks/data-breach.md) — data breach response
 - [runbooks/notifications-production.md](runbooks/notifications-production.md) — email/SMS production setup
 - [runbooks/disaster-recovery.md](runbooks/disaster-recovery.md) — backup, restore, and failover
+- [runbooks/scim-token-rotation.md](runbooks/scim-token-rotation.md) — SCIM bearer token rotation
 
 ## Performance
 

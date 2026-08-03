@@ -3,7 +3,11 @@ use authsvc_core::{client::OAuthClient, AuthError};
 use super::host::is_blocked_host;
 
 /// Validate redirect URI structure and production safety rules.
-pub fn validate_redirect_uri_format(uri: &str, production: bool) -> Result<(), AuthError> {
+pub fn validate_redirect_uri_format(
+    uri: &str,
+    production: bool,
+    allow_custom_schemes: bool,
+) -> Result<(), AuthError> {
     let parsed = url::Url::parse(uri)
         .map_err(|_| AuthError::Validation("redirect_uri must be a valid absolute URL".into()))?;
 
@@ -42,7 +46,12 @@ pub fn validate_redirect_uri_format(uri: &str, production: bool) -> Result<(), A
             ));
         }
         _ => {
-            // Custom URI schemes (e.g. mobile deep links) are allowed.
+            if production && !allow_custom_schemes {
+                return Err(AuthError::Validation(
+                    "custom redirect_uri schemes are disabled in production".into(),
+                ));
+            }
+            // Custom URI schemes (e.g. mobile deep links) when explicitly allowed.
         }
     }
 
@@ -54,8 +63,9 @@ pub fn validate_redirect_uri(
     client: &OAuthClient,
     redirect_uri: &str,
     require_registered: bool,
+    allow_custom_schemes: bool,
 ) -> Result<(), AuthError> {
-    validate_redirect_uri_format(redirect_uri, require_registered)?;
+    validate_redirect_uri_format(redirect_uri, require_registered, allow_custom_schemes)?;
 
     if client.redirect_uris.is_empty() {
         if require_registered {
@@ -76,6 +86,7 @@ pub fn validate_client_redirect_uris(
     redirect_uris: &[String],
     grant_types: &[String],
     require_registered: bool,
+    allow_custom_schemes: bool,
 ) -> Result<(), AuthError> {
     let needs_redirect = grant_types.iter().any(|g| g == "authorization_code");
     if require_registered && needs_redirect && redirect_uris.is_empty() {
@@ -84,7 +95,7 @@ pub fn validate_client_redirect_uris(
         ));
     }
     for uri in redirect_uris {
-        validate_redirect_uri_format(uri, require_registered)?;
+        validate_redirect_uri_format(uri, require_registered, allow_custom_schemes)?;
     }
     Ok(())
 }
@@ -95,28 +106,33 @@ mod tests {
 
     #[test]
     fn blocks_localhost_in_production() {
-        assert!(validate_redirect_uri_format("http://localhost/cb", true).is_err());
-        assert!(validate_redirect_uri_format("https://127.0.0.1/cb", true).is_err());
+        assert!(validate_redirect_uri_format("http://localhost/cb", true, false).is_err());
+        assert!(validate_redirect_uri_format("https://127.0.0.1/cb", true, false).is_err());
     }
 
     #[test]
     fn allows_localhost_in_dev() {
-        assert!(validate_redirect_uri_format("http://localhost/cb", false).is_ok());
+        assert!(validate_redirect_uri_format("http://localhost/cb", false, true).is_ok());
     }
 
     #[test]
     fn requires_https_in_production() {
-        assert!(validate_redirect_uri_format("http://app.example.com/cb", true).is_err());
-        assert!(validate_redirect_uri_format("https://app.example.com/cb", true).is_ok());
+        assert!(validate_redirect_uri_format("http://app.example.com/cb", true, false).is_err());
+        assert!(validate_redirect_uri_format("https://app.example.com/cb", true, false).is_ok());
     }
 
     #[test]
-    fn allows_custom_scheme() {
-        assert!(validate_redirect_uri_format("myapp://callback", true).is_ok());
+    fn allows_custom_scheme_when_enabled() {
+        assert!(validate_redirect_uri_format("myapp://callback", true, true).is_ok());
+    }
+
+    #[test]
+    fn blocks_custom_scheme_in_production_by_default() {
+        assert!(validate_redirect_uri_format("myapp://callback", true, false).is_err());
     }
 
     #[test]
     fn blocks_javascript_scheme() {
-        assert!(validate_redirect_uri_format("javascript:alert(1)", false).is_err());
+        assert!(validate_redirect_uri_format("javascript:alert(1)", false, true).is_err());
     }
 }

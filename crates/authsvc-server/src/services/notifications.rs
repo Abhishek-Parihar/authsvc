@@ -29,7 +29,7 @@ impl SmtpNotificationSender {
         Some(Self {
             smtp_url,
             from,
-            client: reqwest::Client::new(),
+            client: crate::http_client::outbound_client(),
         })
     }
 }
@@ -78,7 +78,7 @@ impl TwilioNotificationSender {
             account_sid,
             auth_token,
             from_number,
-            client: reqwest::Client::new(),
+            client: crate::http_client::outbound_client(),
             email_fallback: SmtpNotificationSender::from_env(),
         })
     }

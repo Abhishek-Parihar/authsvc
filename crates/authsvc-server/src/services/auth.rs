@@ -508,6 +508,7 @@ pub async fn create_oauth_client(
         &redirect_uris,
         &grant_types,
         state.config.is_production(),
+        state.config.allow_custom_scheme_redirects,
     )?;
 
     let client_id = format!("cli_{}", &Uuid::new_v4().to_string().replace('-', "")[..16]);

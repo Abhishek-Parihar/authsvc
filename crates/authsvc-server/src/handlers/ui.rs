@@ -90,7 +90,7 @@ document.getElementById('f').onsubmit=async(e)=>{{
     )
 }
 
-pub fn device_html(issuer: &str, user_code: &str) -> String {
+pub fn device_html(issuer: &str, user_code: &str, csrf_token: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html lang="en"><head>
@@ -108,6 +108,7 @@ button{{width:100%;padding:.75rem;background:#3b82f6;color:#fff;border:none;bord
 <h1>Authorize device</h1>
 <p>Enter the code shown on your device, then sign in.</p>
 <form method="POST" action="{issuer}/device/approve">
+<input type="hidden" name="csrf_token" value="{csrf_token}">
 <label>Device code</label><input name="user_code" value="{user_code}" required placeholder="ABCD-EFGH">
 <label>Email</label><input type="email" name="email" required>
 <label>Password</label><input type="password" name="password" required>

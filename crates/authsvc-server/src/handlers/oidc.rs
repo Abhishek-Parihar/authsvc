@@ -294,7 +294,7 @@ async fn end_session(
 
     if let Some(q) = query {
         if let Some(redirect_uri) = q.post_logout_redirect_uri {
-            if let Some(client_id) = q.client_id.as_deref() {
+            let validated = if let Some(client_id) = q.client_id.as_deref() {
                 let client = state
                     .repos
                     .clients()
@@ -305,9 +305,37 @@ async fn end_session(
                     &client,
                     &redirect_uri,
                     state.config.is_production(),
+                    state.config.allow_custom_scheme_redirects,
                 )?;
+                true
             } else if let Some(hint) = &q.id_token_hint {
-                let _ = state.jwt.validate_id_token(hint)?;
+                let claims = state.jwt.validate_id_token(hint)?;
+                if claims.aud.is_empty() {
+                    return Err(ApiError(AuthError::Validation(
+                        "id_token_hint missing audience".into(),
+                    )));
+                }
+                let client = state
+                    .repos
+                    .clients()
+                    .find_by_client_id(&claims.aud[0])
+                    .await?
+                    .ok_or(AuthError::ClientNotFound)?;
+                crate::security::redirect_uri::validate_redirect_uri(
+                    &client,
+                    &redirect_uri,
+                    state.config.is_production(),
+                    state.config.allow_custom_scheme_redirects,
+                )?;
+                true
+            } else {
+                false
+            };
+
+            if !validated {
+                return Err(ApiError(AuthError::Validation(
+                    "client_id or id_token_hint required with post_logout_redirect_uri".into(),
+                )));
             }
 
             let mut target = redirect_uri;

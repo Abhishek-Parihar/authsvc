@@ -85,6 +85,7 @@ pub async fn assign_user_role(
     if let Ok(account_id) = platform::default_account_id(state).await {
         let _ = super::cache_layer::invalidate_user_permissions(state, user_id, account_id).await;
     }
+    state.repos.postgres().revoke_user_refresh_tokens(user_id).await?;
     Ok(())
 }
 

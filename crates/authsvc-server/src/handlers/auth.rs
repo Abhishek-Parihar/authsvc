@@ -232,6 +232,10 @@ pub async fn complete_mfa(
 ) -> AppResult<impl IntoResponse> {
     let challenge_id = uuid::Uuid::parse_str(&body.challenge_id)
         .map_err(|_| ApiError(AuthError::Validation("invalid challenge_id".into())))?;
+    state
+        .rate_limiter
+        .check(&format!("mfa_complete:{challenge_id}"))
+        .await?;
     let tokens = complete_mfa_login(&state, challenge_id, &body.code).await?;
     Ok(Json(tokens))
 }

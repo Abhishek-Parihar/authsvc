@@ -98,7 +98,7 @@ async fn deliver_webhook(
     let delivery_id = Uuid::new_v4();
     let body = serde_json::json!({"event": event, "payload": payload});
     let sig = sign_payload(secret, &body.to_string());
-    let client = reqwest::Client::new();
+    let client = crate::http_client::outbound_client();
 
     let mut last_error = None;
     for attempt in 1..=3 {
