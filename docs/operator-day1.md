@@ -125,6 +125,16 @@ See [runbooks/notifications-production.md](./runbooks/notifications-production.m
 
 ## 9. Post-deploy verification
 
+```bash
+export AUTHSVC_URL=https://auth.example.com
+export EXPECTED_ISSUER=https://auth.example.com
+export METRICS_BEARER_TOKEN="<from secrets>"
+export ADMIN_ACCESS_TOKEN="<admin JWT>"   # optional
+make verify-production
+```
+
+Or run `./scripts/verify_production.sh` directly (same env vars).
+
 | Check | Command |
 |-------|---------|
 | Health | `curl /health` and `/ready` |

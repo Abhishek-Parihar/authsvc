@@ -51,7 +51,7 @@ use crate::{
         webauthn::{login_begin, login_finish, register_begin, register_finish},
         SharedState,
     },
-    middleware::{require_admin, require_authenticated, require_bootstrap_or_open, require_metrics_token, security_headers, set_account_context},
+    middleware::{require_admin, require_authenticated, require_bootstrap_or_open, require_metrics_token, ip_rate_limit, request_metrics, security_headers, set_account_context},
     services::{
         archival::spawn_archival_loop,
         state::AppState,
@@ -292,6 +292,8 @@ pub fn build_router(state: SharedState, metrics_handle: metrics_exporter_prometh
         .merge(admin)
         .layer(axum_mw::from_fn_with_state(state.clone(), set_account_context))
         .layer(axum_mw::from_fn_with_state(state.clone(), security_headers))
+        .layer(axum_mw::from_fn_with_state(state.clone(), ip_rate_limit))
+        .layer(axum_mw::from_fn(request_metrics))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state)

@@ -2,6 +2,8 @@ use authsvc_core::AuthError;
 use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 
+const WINDOW_SECS: i64 = 60;
+
 #[derive(Clone)]
 pub struct RateLimiter {
     pool: Pool,
@@ -17,6 +19,14 @@ impl RateLimiter {
     }
 
     pub async fn check(&self, key: &str) -> Result<(), AuthError> {
+        self.check_with_limit(key, self.max_per_minute).await
+    }
+
+    pub async fn check_with_limit(&self, key: &str, max_per_minute: u32) -> Result<(), AuthError> {
+        if max_per_minute == 0 {
+            return Ok(());
+        }
+
         let mut conn = self
             .pool
             .get()
@@ -31,14 +41,23 @@ impl RateLimiter {
 
         if count == 1 {
             let _: () = conn
-                .expire(&redis_key, 60)
+                .expire(&redis_key, WINDOW_SECS)
                 .await
                 .map_err(|e| AuthError::Internal(e.to_string()))?;
         }
 
-        if count > self.max_per_minute as i64 {
+        if count > max_per_minute as i64 {
             crate::observability::record_rate_limit_hit();
-            return Err(AuthError::Forbidden);
+            let ttl: i64 = conn
+                .ttl(&redis_key)
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?;
+            let retry_after = if ttl > 0 {
+                ttl as u64
+            } else {
+                WINDOW_SECS as u64
+            };
+            return Err(AuthError::RateLimited(retry_after));
         }
         Ok(())
     }

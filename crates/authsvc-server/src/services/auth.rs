@@ -64,10 +64,11 @@ pub async fn register_user(
     password: &str,
     display_name: Option<String>,
 ) -> Result<(authsvc_core::User, Uuid), AuthError> {
-    if password.len() < 8 {
-        return Err(AuthError::Validation(
-            "password must be at least 8 characters".into(),
-        ));
+    let min_len = if state.config.is_production() { 12 } else { 8 };
+    if password.len() < min_len {
+        return Err(AuthError::Validation(format!(
+            "password must be at least {min_len} characters"
+        )));
     }
 
     let account = platform::default_account(state).await?;
@@ -338,6 +339,7 @@ pub async fn client_credentials_grant(
         Some(client.website_id),
         Some(&client.client_id),
         &scopes,
+        None,
     )?;
 
     let mut resp = empty_token_response();
@@ -436,12 +438,15 @@ async fn issue_user_tokens_with_family(
         client.scopes.clone()
     };
 
+    let permissions = resolve_jwt_permissions(state, user.id, ctx.account_id, ctx.website_id).await?;
+
     let (access_token, _) = state.jwt.issue_access_token(
         user.id,
         ctx.account_id,
         Some(ctx.website_id),
         Some(&client.client_id),
         &scopes,
+        permissions.as_deref(),
     )?;
 
     let id_token = if scopes.iter().any(|s| s == "openid") {
@@ -489,10 +494,16 @@ pub async fn create_oauth_client(
     let website = platform::default_website(state).await?;
     let grant_types = vec![
         "authorization_code".into(),
-        "password".into(),
         "refresh_token".into(),
         "client_credentials".into(),
     ];
+    let grant_types = if state.config.is_production() {
+        grant_types
+    } else {
+        let mut types = grant_types;
+        types.insert(1, "password".into());
+        types
+    };
     crate::security::redirect_uri::validate_client_redirect_uris(
         &redirect_uris,
         &grant_types,
@@ -539,4 +550,27 @@ pub async fn revoke_refresh_token(state: &AppState, token: &str) -> Result<(), A
             .await?;
     }
     Ok(())
+}
+
+async fn resolve_jwt_permissions(
+    state: &AppState,
+    user_id: Uuid,
+    account_id: Uuid,
+    website_id: Uuid,
+) -> Result<Option<Vec<String>>, AuthError> {
+    if !state.config.include_permissions_in_jwt {
+        return Ok(None);
+    }
+    let perms = state
+        .repos
+        .roles()
+        .list_user_permissions(user_id, account_id, Some(website_id))
+        .await?;
+    let max = state.config.max_permissions_in_jwt as usize;
+    let names: Vec<String> = perms
+        .iter()
+        .take(max)
+        .map(|p| format!("{}:{}", p.resource, p.action))
+        .collect();
+    Ok(Some(names))
 }

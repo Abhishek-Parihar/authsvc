@@ -70,4 +70,15 @@ impl PostgresStore {
             .map_err(|e| AuthError::Internal(e.to_string()))?;
         Ok(())
     }
+
+    pub async fn active_signing_key_age_days(&self) -> Result<Option<i64>, AuthError> {
+        let row = sqlx::query_scalar(
+            "SELECT FLOOR(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400)::bigint
+             FROM signing_keys WHERE active = TRUE ORDER BY created_at DESC LIMIT 1",
+        )
+        .fetch_optional(self.pool())
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(row)
+    }
 }

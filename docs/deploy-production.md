@@ -34,6 +34,8 @@ Production options (in order of preference):
 |----------|-----------------|---------|
 | `DATA_ENCRYPTION_KEY` | Yes | MFA, webhooks, IdP configs, encrypted JWT keys |
 | `METRICS_BEARER_TOKEN` | Yes | Protects `/metrics` in production |
+| `BOOTSTRAP_SECRET` | No | Initial admin access; unset after bootstrap |
+| `ALLOW_BOOTSTRAP_SECRET` | No | Must be `true` to keep bootstrap secret in production |
 | `DATABASE_MIGRATOR_URL` | Recommended | Superuser/migrator connection for audit retention purge |
 | `MIGRATE_ON_START` | No | Set `false` when migrations run via init container (Helm default) |
 | `JWT_PRIVATE_KEY_PEM` | Yes* | JWT signing (*or use `JWT_KMS_HTTP_URL`) |
@@ -59,3 +61,17 @@ Production options (in order of preference):
 ## Row-level security
 
 Migrations enable RLS on `account_members` and `audit_events`. The server sets `app.account_id` from the JWT on each authenticated request.
+
+## Post-deploy verification
+
+Use `deploy/helm/authsvc/values-prod.yaml` for production Helm defaults, then:
+
+```bash
+export AUTHSVC_URL=https://auth.example.com
+export EXPECTED_ISSUER=https://auth.example.com
+export METRICS_BEARER_TOKEN=...
+export ADMIN_ACCESS_TOKEN=...   # optional admin JWT
+make verify-production
+```
+
+Checks: `/health`, `/ready`, OIDC discovery + JWKS, metrics bearer auth, password grant disabled, optional `/v1/compliance/status`.

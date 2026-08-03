@@ -100,6 +100,11 @@ pub async fn disable_mfa(state: &AppState, user_id: Uuid) -> Result<(), AuthErro
 }
 
 pub async fn send_magic_link(state: &AppState, email: &str) -> Result<String, AuthError> {
+    state
+        .rate_limiter
+        .check(&format!("magic_link:{}", email.to_lowercase()))
+        .await?;
+
     let token = generate_refresh_token();
     let hash = hash_token(&token);
     state

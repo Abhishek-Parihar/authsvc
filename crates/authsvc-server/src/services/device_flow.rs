@@ -26,6 +26,11 @@ pub async fn start_device_authorization(
     client_secret: &str,
     scope: Option<&str>,
 ) -> Result<DeviceAuthorizationResponse, AuthError> {
+    state
+        .rate_limiter
+        .check(&format!("device:{client_id}"))
+        .await?;
+
     let client = auth::verify_confidential_client(state, client_id, client_secret).await?;
 
     let scopes: Vec<String> = scope

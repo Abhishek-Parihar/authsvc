@@ -158,6 +158,50 @@ spec:
             - name: DSAR_ARTIFACT_RETENTION_DAYS
               value: {{ .Values.env.DSAR_ARTIFACT_RETENTION_DAYS | quote }}
             {{- end }}
+            {{- if .Values.env.ACCESS_TOKEN_TTL_SECS }}
+            - name: ACCESS_TOKEN_TTL_SECS
+              value: {{ .Values.env.ACCESS_TOKEN_TTL_SECS | quote }}
+            {{- end }}
+            {{- if .Values.env.REFRESH_TOKEN_TTL_SECS }}
+            - name: REFRESH_TOKEN_TTL_SECS
+              value: {{ .Values.env.REFRESH_TOKEN_TTL_SECS | quote }}
+            {{- end }}
+            {{- if .Values.env.SESSION_TTL_SECS }}
+            - name: SESSION_TTL_SECS
+              value: {{ .Values.env.SESSION_TTL_SECS | quote }}
+            {{- end }}
+            {{- if .Values.env.DISABLE_PASSWORD_GRANT }}
+            - name: DISABLE_PASSWORD_GRANT
+              value: {{ .Values.env.DISABLE_PASSWORD_GRANT | quote }}
+            {{- end }}
+            {{- if .Values.env.COOKIE_SECURE }}
+            - name: COOKIE_SECURE
+              value: {{ .Values.env.COOKIE_SECURE | quote }}
+            {{- end }}
+            {{- if .Values.env.LOCKOUT_MAX_ATTEMPTS }}
+            - name: LOCKOUT_MAX_ATTEMPTS
+              value: {{ .Values.env.LOCKOUT_MAX_ATTEMPTS | quote }}
+            {{- end }}
+            {{- if .Values.env.LOCKOUT_DURATION_SECS }}
+            - name: LOCKOUT_DURATION_SECS
+              value: {{ .Values.env.LOCKOUT_DURATION_SECS | quote }}
+            {{- end }}
+            {{- if .Values.env.IP_RATE_LIMIT_PER_MINUTE }}
+            - name: IP_RATE_LIMIT_PER_MINUTE
+              value: {{ .Values.env.IP_RATE_LIMIT_PER_MINUTE | quote }}
+            {{- end }}
+            {{- if .Values.env.INCLUDE_PERMISSIONS_IN_JWT }}
+            - name: INCLUDE_PERMISSIONS_IN_JWT
+              value: {{ .Values.env.INCLUDE_PERMISSIONS_IN_JWT | quote }}
+            {{- end }}
+            {{- if .Values.env.MAX_PERMISSIONS_IN_JWT }}
+            - name: MAX_PERMISSIONS_IN_JWT
+              value: {{ .Values.env.MAX_PERMISSIONS_IN_JWT | quote }}
+            {{- end }}
+            {{- if .Values.env.JWT_KEY_MAX_AGE_DAYS }}
+            - name: JWT_KEY_MAX_AGE_DAYS
+              value: {{ .Values.env.JWT_KEY_MAX_AGE_DAYS | quote }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: {{ .Values.livenessProbe.path }}

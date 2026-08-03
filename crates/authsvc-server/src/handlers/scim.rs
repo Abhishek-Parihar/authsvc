@@ -21,7 +21,31 @@ async fn scim_account(state: &SharedState, headers: &axum::http::HeaderMap) -> R
     let token = hdr
         .strip_prefix("Bearer ")
         .ok_or(ApiError(authsvc_core::AuthError::Forbidden))?;
-    Ok(authenticate_scim(state, token).await?)
+    let account_id = authenticate_scim(state, token).await?;
+    scim_rate_limit(state, account_id).await?;
+    Ok(account_id)
+}
+
+async fn scim_rate_limit(state: &SharedState, account_id: Uuid) -> Result<(), ApiError> {
+    let limit = if let Some(override_limit) = state
+        .repos
+        .postgres()
+        .account_rate_limit_override(account_id)
+        .await?
+    {
+        if override_limit > 0 {
+            override_limit as u32
+        } else {
+            state.config.rate_limit_per_minute
+        }
+    } else {
+        state.config.rate_limit_per_minute
+    };
+    state
+        .rate_limiter
+        .check_with_limit(&format!("scim:{account_id}"), limit)
+        .await?;
+    Ok(())
 }
 
 pub async fn list_users(

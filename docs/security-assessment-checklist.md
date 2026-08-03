@@ -14,6 +14,7 @@ Self-assessment checklist for security reviews, vendor questionnaires, and pre-a
 | MFA (TOTP, email/phone OTP, magic link) | ✅ | `handlers/auth.rs` |
 | WebAuthn / passkeys | ✅ | `handlers/webauthn.rs` |
 | Device authorization grant (RFC 8628) | ✅ | `services/device_flow.rs` |
+| Admin console httpOnly session (no JWT in Redis) | ✅ | `services/admin_session.rs` — stores user context only |
 
 ## Cryptography
 
@@ -24,6 +25,8 @@ Self-assessment checklist for security reviews, vendor questionnaires, and pre-a
 | Optional external KMS for signing | ✅ | `JWT_KMS_HTTP_URL` |
 | Data encryption key for secrets/MFA | ✅ | `DATA_ENCRYPTION_KEY`, `crypto/data_keys.rs` |
 | Key rotation API | ✅ | `POST /v1/keys/rotate` |
+| JWT key age monitoring + compliance alert | ✅ | `JWT_KEY_MAX_AGE_DAYS`, `services/archival.rs`, `/v1/compliance/status` |
+| RBAC permissions in JWT (optional) | ✅ | `INCLUDE_PERMISSIONS_IN_JWT`, `AccessTokenClaims.permissions` |
 
 ## Authorization & multi-tenancy
 
@@ -61,11 +64,18 @@ Self-assessment checklist for security reviews, vendor questionnaires, and pre-a
 | Production config validation | ✅ | `config.rs` |
 | Metrics endpoint bearer auth (prod) | ✅ | `middleware/metrics_auth.rs` |
 | Security headers (CSP, HSTS) | ✅ | `middleware/security.rs` |
-| Rate limiting (Redis) | ✅ | `middleware/rate_limit.rs` |
+| Rate limiting (Redis) per-endpoint + per-IP | ✅ | `middleware/rate_limit.rs`, `middleware/ip_rate_limit.rs` |
+| Rate limit HTTP 429 + Retry-After | ✅ | `handlers/mod.rs`, `AuthError::RateLimited` |
+| Per-account rate limit override | ✅ | `accounts.rate_limit_override`, `middleware/auth.rs` |
 | Graceful shutdown | ✅ | `main.rs` |
 | Container image scanning (Trivy) | ✅ | `.github/workflows/ci.yml` |
 | Dependency audit (cargo-audit) | ✅ | CI `security-audit` job |
 | Perf SLO regression gate | ✅ | `scripts/perf_test.sh`, nightly workflow |
+| NetworkPolicy (Helm) | ✅ | `deploy/helm/authsvc/templates/networkpolicy.yaml` |
+| ExternalSecrets template (Helm) | ✅ | `deploy/helm/authsvc/templates/externalsecret.yaml` |
+| Prometheus ServiceMonitor | ✅ | `deploy/helm/authsvc/templates/servicemonitor.yaml` |
+| HTTP request latency histograms | ✅ | `middleware/request_metrics.rs`, `observability.rs` |
+| DR / backup runbook | ✅ | `docs/runbooks/disaster-recovery.md` |
 
 ## Incident response
 
@@ -75,6 +85,7 @@ Self-assessment checklist for security reviews, vendor questionnaires, and pre-a
 | Account lockdown runbook | ✅ | `docs/runbooks/account-lockdown.md` |
 | Data breach runbook | ✅ | `docs/runbooks/data-breach.md` |
 | Notifications production runbook | ✅ | `docs/runbooks/notifications-production.md` |
+| Disaster recovery runbook | ✅ | `docs/runbooks/disaster-recovery.md` |
 
 ## Known gaps (pre-audit)
 
@@ -82,15 +93,14 @@ Self-assessment checklist for security reviews, vendor questionnaires, and pre-a
 |-----|-----------------|
 | No third-party pen-test report | Schedule annual pen-test; attach report here |
 | No formal SOC 2 Type II | Use control mapping; engage auditor when ready |
-| Admin UI uses localStorage for token | Prefer short-lived JWT; restrict admin to VPN/IP allowlist |
 | Custom URI scheme redirects not DNS-checked | Accept risk for native apps; document in client onboarding |
-| Password grant available in dev | Disabled in production via `DISABLE_PASSWORD_GRANT` |
+| Password grant in dev only | Disabled in production via `DISABLE_PASSWORD_GRANT`; omitted from OIDC discovery |
 
 ## Review cadence
 
 - **Quarterly:** Re-run this checklist; update evidence links
-- **On release:** Verify CI (tests, audit, Trivy) green
-- **Annually:** External pen-test; rotate all long-lived secrets
+- **On release:** Verify CI (tests, audit, Trivy, helm lint) green; run `verify_production.sh`
+- **Annually:** External pen-test; rotate all long-lived secrets; DR restore drill
 
 ## Related
 

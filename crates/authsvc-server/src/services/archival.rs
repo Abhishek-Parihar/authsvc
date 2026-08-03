@@ -73,6 +73,19 @@ pub async fn run_archival(state: &AppState) -> Result<(), AuthError> {
         dsar_purged = dsar,
         "archival job completed"
     );
+    crate::observability::record_archival_run(true);
+
+    if let Ok(Some(age_days)) = state.repos.postgres().active_signing_key_age_days().await {
+        if age_days >= state.config.jwt_key_max_age_days as i64 {
+            crate::observability::record_jwt_key_age_alert();
+            tracing::warn!(
+                age_days = age_days,
+                max_age_days = state.config.jwt_key_max_age_days,
+                "active JWT signing key exceeded max age policy; rotate via POST /v1/keys/rotate"
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -98,6 +111,7 @@ pub fn spawn_archival_loop(state: AppState) {
                         Ok(true) => {
                             if let Err(e) = run_archival(&state).await {
                                 tracing::warn!(error = %e, "archival job failed");
+                                crate::observability::record_archival_run(false);
                             }
                         }
                         Ok(false) => tracing::debug!("skipping archival; not leader"),

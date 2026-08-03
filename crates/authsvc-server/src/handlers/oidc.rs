@@ -11,8 +11,9 @@ use uuid::Uuid;
 
 use crate::{
     handlers::{auth::extract_bearer_user, ApiError, AppResult, SharedState},
-    middleware::{authenticate, AuthContext},
+    middleware::{authorize_authz_caller, extract_client_credentials},
     services::{
+        auth::verify_confidential_client,
         authz::check_authorization,
         oidc_flow::{self, AuthorizeParams},
     },
@@ -22,6 +23,16 @@ pub async fn openid_configuration(
     State(state): State<SharedState>,
 ) -> AppResult<Json<Value>> {
     let issuer = state.jwt.issuer();
+    let mut grant_types = vec![
+        "authorization_code",
+        "client_credentials",
+        "refresh_token",
+        "api_key",
+        "urn:ietf:params:oauth:grant-type:device_code",
+    ];
+    if !state.config.disable_password_grant {
+        grant_types.insert(1, "password");
+    }
     Ok(Json(json!({
         "issuer": issuer,
         "authorization_endpoint": format!("{issuer}/oauth/authorize"),
@@ -33,14 +44,7 @@ pub async fn openid_configuration(
         "end_session_endpoint": format!("{issuer}/oauth/logout"),
         "device_authorization_endpoint": format!("{issuer}/oauth/device_authorization"),
         "response_types_supported": ["code"],
-        "grant_types_supported": [
-            "authorization_code",
-            "client_credentials",
-            "password",
-            "refresh_token",
-            "api_key",
-            "urn:ietf:params:oauth:grant-type:device_code"
-        ],
+        "grant_types_supported": grant_types,
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
         "token_endpoint_auth_methods_supported": [
@@ -80,18 +84,13 @@ pub async fn check(
         .map(Uuid::parse_str)
         .transpose()
         .map_err(|_| AuthError::Validation("invalid website_id".into()))?;
+    let subject_id = Uuid::parse_str(&body.subject_id)
+        .map_err(|_| AuthError::Validation("invalid subject_id".into()))?;
 
-    if let Ok(AuthContext::ApiKey { account_id: key_account, .. }) =
-        authenticate(&state, &headers).await
-    {
-        if key_account != account_id {
-            return Err(ApiError(AuthError::Forbidden));
-        }
-    }
+    authorize_authz_caller(&state, &headers, account_id, subject_id).await?;
 
     let req = AuthzCheck {
-        subject_id: Uuid::parse_str(&body.subject_id)
-            .map_err(|_| AuthError::Validation("invalid subject_id".into()))?,
+        subject_id,
         account_id,
         website_id,
         action: body.action,
@@ -116,25 +115,42 @@ pub struct IntrospectRequest {
     pub token: String,
     #[serde(default)]
     pub token_type_hint: Option<String>,
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub client_secret: Option<String>,
 }
 
 pub async fn introspect(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(body): Json<IntrospectRequest>,
 ) -> AppResult<Json<Value>> {
+    let creds = extract_client_credentials(&headers, body.client_id, body.client_secret)?;
+    verify_confidential_client(&state, &creds.client_id, &creds.client_secret).await?;
+    state
+        .rate_limiter
+        .check(&format!("introspect:{}", creds.client_id))
+        .await?;
+
     let _ = body.token_type_hint;
     match state.jwt.validate_access_token(&body.token) {
-        Ok(claims) => Ok(Json(json!({
-            "active": true,
-            "sub": claims.sub,
-            "client_id": claims.client_id,
-            "scope": claims.scope,
-            "exp": claims.exp,
-            "iat": claims.iat,
-            "iss": claims.iss,
-            "account_id": claims.account_id,
-            "website_id": claims.website_id
-        }))),
+        Ok(claims) => {
+            if claims.client_id.as_deref() != Some(creds.client_id.as_str()) {
+                return Ok(Json(json!({ "active": false })));
+            }
+            Ok(Json(json!({
+                "active": true,
+                "sub": claims.sub,
+                "client_id": claims.client_id,
+                "scope": claims.scope,
+                "exp": claims.exp,
+                "iat": claims.iat,
+                "iss": claims.iss,
+                "account_id": claims.account_id,
+                "website_id": claims.website_id
+            })))
+        }
         Err(_) => Ok(Json(json!({ "active": false }))),
     }
 }
@@ -154,6 +170,11 @@ pub async fn authorize(
     State(state): State<SharedState>,
     Query(q): Query<AuthorizeQuery>,
 ) -> AppResult<impl axum::response::IntoResponse> {
+    state
+        .rate_limiter
+        .check(&format!("authorize:{}", q.client_id))
+        .await?;
+
     if q.response_type != "code" {
         return Err(ApiError(AuthError::Validation(
             "only response_type=code supported".into(),

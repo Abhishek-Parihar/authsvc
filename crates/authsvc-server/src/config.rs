@@ -25,6 +25,8 @@ pub struct Config {
     #[serde(default = "default_website")]
     pub default_website_slug: String,
     pub bootstrap_secret: Option<String>,
+    #[serde(default)]
+    pub allow_bootstrap_secret: bool,
     #[serde(default = "default_env")]
     pub env: String,
     #[serde(default, skip)]
@@ -35,6 +37,14 @@ pub struct Config {
     pub lockout_duration_secs: u64,
     #[serde(default = "default_rate_limit")]
     pub rate_limit_per_minute: u32,
+    #[serde(default = "default_ip_rate_limit")]
+    pub ip_rate_limit_per_minute: u32,
+    #[serde(default)]
+    pub include_permissions_in_jwt: bool,
+    #[serde(default = "default_max_permissions_in_jwt")]
+    pub max_permissions_in_jwt: u32,
+    #[serde(default = "default_jwt_key_max_age_days")]
+    pub jwt_key_max_age_days: u64,
     pub mfa_encryption_key: Option<String>,
     pub data_encryption_key: Option<String>,
     pub kms_http_url: Option<String>,
@@ -112,6 +122,15 @@ fn default_lockout_secs() -> u64 {
 }
 fn default_rate_limit() -> u32 {
     60
+}
+fn default_ip_rate_limit() -> u32 {
+    300
+}
+fn default_max_permissions_in_jwt() -> u32 {
+    64
+}
+fn default_jwt_key_max_age_days() -> u64 {
+    90
 }
 fn default_policy_backend() -> String {
     "rbac".into()
@@ -196,6 +215,11 @@ impl Config {
             if cfg.metrics_bearer_token.is_none() {
                 anyhow::bail!("METRICS_BEARER_TOKEN required in production");
             }
+            if cfg.bootstrap_secret.is_some() && !cfg.allow_bootstrap_secret {
+                anyhow::bail!(
+                    "BOOTSTRAP_SECRET must not be set in production without ALLOW_BOOTSTRAP_SECRET=true"
+                );
+            }
             if !cfg.cookie_secure {
                 cfg.cookie_secure = true;
             }
@@ -211,5 +235,36 @@ impl Config {
 
     pub fn is_managed_saas(&self) -> bool {
         self.deployment_mode == "managed_saas"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn production_rejects_bootstrap_secret_without_opt_in() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        std::env::set_var("ENV", "production");
+        std::env::set_var("DATABASE_URL", "postgres://localhost/authsvc");
+        std::env::set_var("BOOTSTRAP_SECRET", "prod-bootstrap");
+        std::env::set_var(
+            "JWT_PUBLIC_KEY_PEM",
+            "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu1SU1LfVLPHCozMxH2Mo\n4lgOEePzNm0tRgeLezV6ffAt0gunVTLw7onLRnrq0/IzW7yWR7QkrmBL7jTKEn5u\n+qKhbwKfBstIs+bMY2Zkp18gnTxKLxoS2tFikRJMtui3f+5GV9INR1wQqRHmLHbA\nS8L3IpsW0E4nFd2e5Fz8x0v1w0v1w0v1w0v1w0v1w0v1w0v1w0v1w0v1w0v1w0v1\nw0IDAQAB\n-----END PUBLIC KEY-----",
+        );
+        std::env::set_var(
+            "JWT_PRIVATE_KEY_PEM",
+            "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUv9Us8cKj\nMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDuictGeurT8jNbvJZHtCSuYEvu\nNMoSfm76oqFvAp8Gy0yz5sxjZmqXXyCdPEovGhLa0WKREky26Ld/7kZX0g1HXBCp\nEeYstsBLwvcimxbQTicV3Z7kXPzHS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS\n/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS\n/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS\n/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS\n/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS/XDS\nAgMBAAECggEAAoIBAQC7VJTUv9Us8cKjMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3S\n-----END PRIVATE KEY-----",
+        );
+        std::env::set_var("DATA_ENCRYPTION_KEY", "01234567890123456789012345678901");
+        std::env::set_var("ALLOWED_ORIGINS", "https://example.com");
+        std::env::set_var("METRICS_BEARER_TOKEN", "metrics-secret");
+        std::env::remove_var("ALLOW_BOOTSTRAP_SECRET");
+
+        let err = Config::from_env().expect_err("bootstrap secret should be rejected");
+        assert!(err.to_string().contains("BOOTSTRAP_SECRET"));
     }
 }

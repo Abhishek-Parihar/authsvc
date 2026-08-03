@@ -25,6 +25,8 @@ pub struct AccessTokenClaims {
     pub client_id: Option<String>,
     pub scope: String,
     pub token_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,6 +150,7 @@ impl JwtKeyStore {
         website_id: Option<Uuid>,
         client_id: Option<&str>,
         scopes: &[String],
+        permissions: Option<&[String]>,
     ) -> Result<(String, AccessTokenClaims), AuthError> {
         let key_set = self
             .inner
@@ -166,6 +169,7 @@ impl JwtKeyStore {
             client_id: client_id.map(str::to_string),
             scope: scopes.join(" "),
             token_type: "Bearer".into(),
+            permissions: permissions.map(|p| p.to_vec()),
         };
 
         let token = encode_rs256_jwt(&key_set.active_signer, &key_set.active_kid, &claims)?;
@@ -400,6 +404,7 @@ mod tests {
                 None,
                 Some("cli_test"),
                 &["openid".into()],
+                None,
             )
             .unwrap();
         let claims = store.validate_access_token(&token).unwrap();

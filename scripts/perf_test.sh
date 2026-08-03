@@ -224,7 +224,7 @@ run_load "Token (password grant)" "$BASE_URL/oauth/token" POST \
 run_load "Token (refresh grant)" "$BASE_URL/oauth/token" POST \
   "{\"grant_type\":\"refresh_token\",\"client_id\":\"$CLIENT_ID\",\"client_secret\":\"$CLIENT_SECRET\",\"refresh_token\":\"$REFRESH_TOKEN\"}"
 run_load "Authz check" "$BASE_URL/v1/authz/check" POST \
-  "{\"subject\":\"user:$USER_ID\",\"resource\":\"users\",\"action\":\"read\",\"account_id\":\"$ACCOUNT_ID\"}"
+  "{\"subject_id\":\"$USER_ID\",\"resource\":\"users\",\"action\":\"read\",\"account_id\":\"$ACCOUNT_ID\"}" "" "Bearer $ACCESS_TOKEN"
 run_load "Userinfo (authenticated)" "$BASE_URL/oauth/userinfo" GET "" "Bearer $ACCESS_TOKEN"
 
 echo ""

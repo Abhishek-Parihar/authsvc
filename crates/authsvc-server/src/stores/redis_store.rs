@@ -76,6 +76,10 @@ impl RedisSessionStore {
     fn key(session_id: Uuid) -> String {
         format!("session:{session_id}")
     }
+
+    fn user_index_key(user_id: Uuid) -> String {
+        format!("user_sessions:{user_id}")
+    }
 }
 
 #[async_trait]
@@ -107,8 +111,18 @@ impl SessionStore for RedisSessionStore {
             .get()
             .await
             .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let session_key = Self::key(session_id);
+        let index_key = Self::user_index_key(user_id);
         let _: () = conn
-            .set_ex(Self::key(session_id), user_id.to_string(), ttl_secs)
+            .set_ex(&session_key, user_id.to_string(), ttl_secs)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let _: () = conn
+            .sadd(&index_key, session_id.to_string())
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let _: () = conn
+            .expire(&index_key, ttl_secs as i64)
             .await
             .map_err(|e| AuthError::Internal(e.to_string()))?;
         Ok(())
@@ -138,11 +152,107 @@ impl SessionStore for RedisSessionStore {
             .get()
             .await
             .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let session_key = Self::key(session_id);
+        let user_id: Option<String> = conn
+            .get(&session_key)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        if let Some(user_id) = user_id {
+            if let Ok(user_uuid) = Uuid::parse_str(&user_id) {
+                let index_key = Self::user_index_key(user_uuid);
+                let _: () = conn
+                    .srem(&index_key, session_id.to_string())
+                    .await
+                    .map_err(|e| AuthError::Internal(e.to_string()))?;
+            }
+        }
         let _: () = conn
-            .del(Self::key(session_id))
+            .del(session_key)
             .await
             .map_err(|e| AuthError::Internal(e.to_string()))?;
         Ok(())
+    }
+
+    async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<Uuid>, AuthError> {
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let index_key = Self::user_index_key(user_id);
+        let members: Vec<String> = conn
+            .smembers(&index_key)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let mut session_ids = Vec::with_capacity(members.len());
+        for member in members {
+            match Uuid::parse_str(&member) {
+                Ok(id) => session_ids.push(id),
+                Err(_) => {
+                    let _: () = conn
+                        .srem(&index_key, member)
+                        .await
+                        .map_err(|e| AuthError::Internal(e.to_string()))?;
+                }
+            }
+        }
+        Ok(session_ids)
+    }
+}
+
+impl RedisSessionStore {
+    pub async fn revoke_all_for_user(&self, user_id: Uuid) -> Result<u64, AuthError> {
+        let session_ids = SessionStore::list_for_user(self, user_id).await?;
+        let mut count = 0u64;
+        for session_id in session_ids {
+            SessionStore::delete(self, session_id).await?;
+            count += 1;
+        }
+
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+
+        let user_id_str = user_id.to_string();
+        let mut cursor = 0u64;
+        loop {
+            let scan: (u64, Vec<String>) = deadpool_redis::redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg("session:*")
+                .arg("COUNT")
+                .arg(128)
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?;
+            cursor = scan.0;
+            for key in scan.1 {
+                let val: Option<String> = conn
+                    .get(&key)
+                    .await
+                    .map_err(|e| AuthError::Internal(e.to_string()))?;
+                if val.as_deref() == Some(user_id_str.as_str()) {
+                    let _: () = conn
+                        .del(&key)
+                        .await
+                        .map_err(|e| AuthError::Internal(e.to_string()))?;
+                    count += 1;
+                }
+            }
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        let index_key = Self::user_index_key(user_id);
+        let _: () = conn
+            .del(index_key)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+
+        Ok(count)
     }
 }
 

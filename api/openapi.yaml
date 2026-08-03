@@ -118,8 +118,24 @@ paths:
   /oauth/introspect:
     post:
       summary: RFC 7662 token introspection
+      security:
+        - ClientSecretBasic: []
+        - ClientSecretPost: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, client_id, client_secret]
+              properties:
+                token: { type: string }
+                client_id: { type: string }
+                client_secret: { type: string }
+                token_type_hint: { type: string }
       responses:
         "200": { description: Introspection result }
+        "401": { description: Invalid client credentials }
   /oauth/authorize:
     get:
       summary: Authorization code flow (PKCE)
@@ -177,6 +193,10 @@ paths:
   /v1/authz/check:
     post:
       summary: Authorization check (RBAC, Casbin, or OpenFGA)
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+        - BootstrapSecret: []
       requestBody:
         content:
           application/json:

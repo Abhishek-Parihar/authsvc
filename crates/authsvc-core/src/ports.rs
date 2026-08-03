@@ -118,6 +118,7 @@ pub trait SessionStore: Send + Sync {
     async fn create(&self, session_id: Uuid, user_id: Uuid, ttl_secs: u64) -> Result<(), AuthError>;
     async fn get_user_id(&self, session_id: Uuid) -> Result<Option<Uuid>, AuthError>;
     async fn delete(&self, session_id: Uuid) -> Result<(), AuthError>;
+    async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<Uuid>, AuthError>;
 }
 
 #[async_trait]

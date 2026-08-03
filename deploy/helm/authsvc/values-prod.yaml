@@ -1,0 +1,159 @@
+# Production Helm values for authsvc.
+#
+# Install (secrets via external manager — do not commit real values):
+#
+#   helm upgrade --install authsvc deploy/helm/authsvc \
+#     -n authsvc --create-namespace \
+#     -f deploy/helm/authsvc/values-prod.yaml \
+#     --set ingress.host=auth.example.com \
+#     --set env.ISSUER=https://auth.example.com \
+#     --set env.ALLOWED_ORIGINS=https://app.example.com \
+#     --set env.WEBAUTHN_RP_ID=auth.example.com \
+#     --set-file secrets.jwtPrivateKeyPem=./jwt-private.pem \
+#     --set-file secrets.jwtPublicKeyPem=./jwt-public.pem \
+#     --set secrets.databaseUrl='postgres://authsvc_app@db:5432/authsvc' \
+#     --set secrets.databaseMigratorUrl='postgres://authsvc_migrator@db:5432/authsvc' \
+#     --set secrets.redisUrl='rediss://redis:6379' \
+#     --set secrets.dataEncryptionKey="$(openssl rand -base64 32)" \
+#     --set secrets.bootstrapSecret="$(openssl rand -hex 32)" \
+#     --set secrets.metricsBearerToken="$(openssl rand -hex 24)"
+#
+# Post-deploy: ./scripts/verify_production.sh
+
+replicaCount: 3
+
+image:
+  repository: authsvc
+  tag: "0.3.0"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: true
+  className: nginx
+  host: auth.example.com
+  tls: true
+  tlsSecret: authsvc-tls
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "3"
+
+networkPolicy:
+  enabled: true
+  ingressNamespaces:
+    - ingress-nginx
+
+serviceMonitor:
+  enabled: true
+  interval: 30s
+  labels:
+    release: prometheus
+
+externalSecret:
+  enabled: false
+  refreshInterval: 1h
+  secretStoreRef:
+    name: cluster-secret-store
+    kind: ClusterSecretStore
+  data:
+    - secretKey: database-url
+      remoteRef:
+        key: authsvc/database-url
+    - secretKey: redis-url
+      remoteRef:
+        key: authsvc/redis-url
+    - secretKey: jwt-private-key-pem
+      remoteRef:
+        key: authsvc/jwt-private-key-pem
+    - secretKey: jwt-public-key-pem
+      remoteRef:
+        key: authsvc/jwt-public-key-pem
+    - secretKey: data-encryption-key
+      remoteRef:
+        key: authsvc/data-encryption-key
+    - secretKey: metrics-bearer-token
+      remoteRef:
+        key: authsvc/metrics-bearer-token
+
+env:
+  ENV: production
+  PORT: "8080"
+  ISSUER: "https://auth.example.com"
+  JWT_KEY_GRACE_SECS: "86400"
+  ACCESS_TOKEN_TTL_SECS: "900"
+  REFRESH_TOKEN_TTL_SECS: "604800"
+  SESSION_TTL_SECS: "86400"
+  POLICY_BACKEND: rbac
+  DATABASE_MAX_CONNECTIONS: "25"
+  DISABLE_PASSWORD_GRANT: "true"
+  COOKIE_SECURE: "true"
+  LOCKOUT_MAX_ATTEMPTS: "5"
+  LOCKOUT_DURATION_SECS: "900"
+  RATE_LIMIT_PER_MINUTE: "120"
+  IP_RATE_LIMIT_PER_MINUTE: "300"
+  INCLUDE_PERMISSIONS_IN_JWT: "true"
+  MAX_PERMISSIONS_IN_JWT: "64"
+  JWT_KEY_MAX_AGE_DAYS: "90"
+  MIGRATE_ON_START: "false"
+  ALLOWED_ORIGINS: "https://app.example.com"
+  WEBAUTHN_RP_ID: "auth.example.com"
+  AUDIT_RETENTION_DAYS: "365"
+  DSAR_ARTIFACT_RETENTION_DAYS: "30"
+  # Optional — uncomment and set via --set when using external services:
+  # DATABASE_READ_URL: ""
+  # JWT_KMS_HTTP_URL: ""
+  # JWT_KMS_KEY_ID: ""
+  # KMS_HTTP_URL: ""
+  # OTEL_ENDPOINT: "http://otel-collector:4317"
+  # AUDIT_EXPORT_WEBHOOK: "https://siem.example.com/audit"
+
+migration:
+  enabled: true
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# Populate via --set / ExternalSecrets before install. Empty defaults fail production startup checks.
+secrets:
+  databaseUrl: ""
+  databaseMigratorUrl: ""
+  redisUrl: ""
+  jwtPrivateKeyPem: ""
+  jwtPublicKeyPem: ""
+  bootstrapSecret: ""
+  mfaEncryptionKey: ""
+  dataEncryptionKey: ""
+  metricsBearerToken: ""
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+livenessProbe:
+  path: /health
+  port: 8080
+  initialDelaySeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  path: /ready
+  port: 8080
+  initialDelaySeconds: 5
+  timeoutSeconds: 5
+  failureThreshold: 3

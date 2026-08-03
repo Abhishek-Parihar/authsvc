@@ -98,8 +98,9 @@ curl -s -X POST http://localhost:8080/oauth/token \
   -H 'Content-Type: application/json' \
   -d '{"grant_type":"password","client_id":"<id>","username":"admin@example.com","password":"securepass123"}' | jq
 
-# 4. Check authorization
+# 4. Check authorization (requires caller auth: user JWT, API key with authz scope, or admin)
 curl -s -X POST http://localhost:8080/v1/authz/check \
+  -H "Authorization: Bearer <access_token>" \
   -H 'Content-Type: application/json' \
   -d '{"subject_id":"<user_id>","account_id":"<account_id>","action":"read","resource":"users"}' | jq
 ```
@@ -115,7 +116,8 @@ Copy [`.env.example`](.env.example) and adjust. Key production variables:
 | `ENV=production` | Enables production defaults (e.g. disables password grant) |
 | `JWT_PRIVATE_KEY_PEM` / `JWT_PUBLIC_KEY_PEM` | JWT signing keys |
 | `DATA_ENCRYPTION_KEY` | Encrypts MFA secrets, IdP configs, stored keys |
-| `BOOTSTRAP_SECRET` | Protects admin/bootstrap routes |
+| `BOOTSTRAP_SECRET` | Protects admin/bootstrap routes (unset in production after setup) |
+| `ALLOW_BOOTSTRAP_SECRET` | Explicit opt-in to keep bootstrap secret when `ENV=production` |
 | `ALLOWED_ORIGINS` | CORS allowlist |
 
 Full reference: [docs/deploy-production.md](docs/deploy-production.md).
@@ -135,15 +137,25 @@ Permissions are intentionally **not** embedded in JWT access tokens. Call `/v1/a
 ## Production deployment
 
 ```bash
-docker build -t authsvc .
-helm install authsvc deploy/helm/authsvc/ \
-  --set secrets.jwtPublicKeyPem="..." \
-  --set secrets.dataEncryptionKey="..." \
-  --set secrets.bootstrapSecret="..."
+helm upgrade --install authsvc deploy/helm/authsvc \
+  -f deploy/helm/authsvc/values-prod.yaml \
+  --namespace authsvc --create-namespace \
+  --set env.ISSUER=https://auth.example.com \
+  --set ingress.host=auth.example.com
+# See values-prod.yaml header for required --set secrets
+```
+
+After deploy:
+
+```bash
+export AUTHSVC_URL=https://auth.example.com
+export EXPECTED_ISSUER=https://auth.example.com
+export METRICS_BEARER_TOKEN=...
+make verify-production
 ```
 
 - Distroless, non-root container image
-- Helm: 3 replicas, HPA, PDB, init-container migrations
+- Helm: 3 replicas, HPA, PDB, `values-prod.yaml`, init-container migrations
 - See [docs/deploy-production.md](docs/deploy-production.md) and [docs/helm-deployment.md](docs/helm-deployment.md)
 
 ## Documentation

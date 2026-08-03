@@ -51,12 +51,7 @@ pub async fn set_account_context(
         .and_then(|v| v.to_str().ok())
     {
         if let Some(token) = hdr.strip_prefix("Bearer ") {
-            if state
-                .config
-                .bootstrap_secret
-                .as_deref()
-                .is_some_and(|secret| token == secret)
-            {
+            if crate::middleware::bootstrap_token_matches(&state.config, token) {
                 account_id = crate::services::admin::default_account_id(&state).await.ok();
             } else if let Ok(claims) =
                 crate::services::auth::validate_bearer_token(&state, token).await

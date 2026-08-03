@@ -10,7 +10,7 @@
 
 - [operator-day1.md](operator-day1.md) — end-to-end day-1 production checklist
 - [deploy-production.md](deploy-production.md) — production secrets, DB roles, JWT keys
-- [helm-deployment.md](helm-deployment.md) — Kubernetes / Helm guide
+- [helm-deployment.md](helm-deployment.md) — Kubernetes / Helm guide (`values-prod.yaml`, `verify_production.sh`)
 - [observability.md](observability.md) — Prometheus metrics and OpenTelemetry
 
 ## Authentication & federation
@@ -30,6 +30,7 @@
 - [runbooks/account-lockdown.md](runbooks/account-lockdown.md) — account lockdown procedures
 - [runbooks/data-breach.md](runbooks/data-breach.md) — data breach response
 - [runbooks/notifications-production.md](runbooks/notifications-production.md) — email/SMS production setup
+- [runbooks/disaster-recovery.md](runbooks/disaster-recovery.md) — backup, restore, and failover
 
 ## Performance
 

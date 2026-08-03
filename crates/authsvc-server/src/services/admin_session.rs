@@ -8,9 +8,17 @@ use crate::services::{admin::default_account_id, authz::user_has_admin_permissio
 const ADMIN_SESSION_TTL_SECS: u64 = 8 * 3600;
 const ADMIN_SESSION_COOKIE: &str = "authsvc_admin_session";
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum AdminSessionKind {
+    Bootstrap,
+    User { user_id: Uuid },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct AdminSessionData {
-    bearer_token: String,
+    kind: AdminSessionKind,
+    account_id: Uuid,
 }
 
 pub fn admin_session_cookie_name() -> &'static str {
@@ -22,16 +30,14 @@ pub async fn create_admin_session(
     token: &str,
     cookie_secure: bool,
 ) -> Result<(String, String), AuthError> {
-    validate_admin_token(state, token).await?;
+    let session_data = resolve_session_data(state, token).await?;
 
     let session_id = Uuid::new_v4();
     state
         .sessions
         .set_json(
             &format!("admin_session:{session_id}"),
-            &AdminSessionData {
-                bearer_token: token.to_string(),
-            },
+            &session_data,
             ADMIN_SESSION_TTL_SECS,
         )
         .await?;
@@ -50,22 +56,41 @@ pub async fn delete_admin_session(state: &AppState, session_id: &str) -> Result<
         .await
 }
 
-pub async fn resolve_admin_bearer_from_cookie(
-    state: &AppState,
-    session_id: &str,
-) -> Result<Option<String>, AuthError> {
+pub async fn validate_admin_session(state: &AppState, session_id: &str) -> Result<(), AuthError> {
     let data: Option<AdminSessionData> = state
         .sessions
         .get_json(&format!("admin_session:{session_id}"))
         .await?;
-    Ok(data.map(|d| d.bearer_token))
+
+    let data = data.ok_or(AuthError::InvalidToken)?;
+
+    match data.kind {
+        AdminSessionKind::Bootstrap => Ok(()),
+        AdminSessionKind::User { user_id } => {
+            if user_has_admin_permission(state, user_id, data.account_id).await? {
+                Ok(())
+            } else {
+                Err(AuthError::Forbidden)
+            }
+        }
+    }
 }
 
-async fn validate_admin_token(state: &AppState, token: &str) -> Result<(), AuthError> {
-    if let Some(secret) = &state.config.bootstrap_secret {
-        if token == secret.as_str() {
-            return Ok(());
-        }
+pub async fn is_admin_session_valid(state: &AppState, session_id: &str) -> Result<bool, AuthError> {
+    match validate_admin_session(state, session_id).await {
+        Ok(()) => Ok(true),
+        Err(AuthError::InvalidToken) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+async fn resolve_session_data(state: &AppState, token: &str) -> Result<AdminSessionData, AuthError> {
+    if crate::middleware::bootstrap_token_matches(&state.config, token) {
+        let account_id = default_account_id(state).await?;
+        return Ok(AdminSessionData {
+            kind: AdminSessionKind::Bootstrap,
+            account_id,
+        });
     }
 
     let claims = state.jwt.validate_access_token(token)?;
@@ -75,7 +100,10 @@ async fn validate_admin_token(state: &AppState, token: &str) -> Result<(), AuthE
         _ => default_account_id(state).await?,
     };
     if user_has_admin_permission(state, user_id, account_id).await? {
-        Ok(())
+        Ok(AdminSessionData {
+            kind: AdminSessionKind::User { user_id },
+            account_id,
+        })
     } else {
         Err(AuthError::Forbidden)
     }

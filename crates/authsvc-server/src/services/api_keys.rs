@@ -39,6 +39,7 @@ pub async fn api_key_grant(state: &AppState, api_key: &str) -> Result<super::aut
         None,
         Some(&format!("apikey:{key_id}")),
         &scopes,
+        Some(&scopes),
     )?;
 
     Ok(super::auth::TokenResponse {

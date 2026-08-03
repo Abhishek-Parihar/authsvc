@@ -154,6 +154,18 @@ impl PostgresStore {
         Ok(row.and_then(|r| r.get::<Option<String>, _>("region")))
     }
 
+    pub async fn account_rate_limit_override(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Option<i32>, AuthError> {
+        let row = sqlx::query("SELECT rate_limit_override FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(self.pool())
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(row.and_then(|r| r.get::<Option<i32>, _>("rate_limit_override")))
+    }
+
     pub async fn revoke_user_refresh_tokens(&self, user_id: Uuid) -> Result<(), AuthError> {
         sqlx::query("UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = $1")
             .bind(user_id)

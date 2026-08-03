@@ -29,6 +29,7 @@ env:
   POLICY_BACKEND: rbac
   DATABASE_MAX_CONNECTIONS: "25"
   DISABLE_PASSWORD_GRANT: "true"
+  COOKIE_SECURE: "false"
   # Optional integrations (leave empty to disable)
   JWT_KMS_HTTP_URL: ""
   JWT_KMS_KEY_ID: ""
@@ -51,6 +52,24 @@ autoscaling:
 podDisruptionBudget:
   enabled: true
   minAvailable: 2
+
+networkPolicy:
+  enabled: false
+  ingressNamespaces:
+    - ingress-nginx
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}
+
+externalSecret:
+  enabled: false
+  refreshInterval: 1h
+  secretStoreRef:
+    name: cluster-secret-store
+    kind: ClusterSecretStore
+  data: []
 
 migration:
   enabled: true

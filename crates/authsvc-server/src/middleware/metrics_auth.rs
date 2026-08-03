@@ -7,7 +7,7 @@ use axum::{
 };
 use serde_json::json;
 
-use crate::handlers::SharedState;
+use crate::{crypto::constant_time::bearer_matches, handlers::SharedState};
 
 pub async fn require_metrics_token(
     State(state): State<SharedState>,
@@ -22,7 +22,7 @@ pub async fn require_metrics_token(
         .headers()
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|hdr| hdr == format!("Bearer {expected}"));
+        .is_some_and(|hdr| bearer_matches(hdr, expected));
 
     if authorized {
         next.run(req).await

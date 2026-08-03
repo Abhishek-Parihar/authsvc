@@ -65,6 +65,11 @@ pub async fn login_begin(
     State(state): State<SharedState>,
     Json(body): Json<WebAuthnLoginBeginRequest>,
 ) -> AppResult<impl axum::response::IntoResponse> {
+    state
+        .rate_limiter
+        .check(&format!("webauthn:{}", body.email.to_lowercase()))
+        .await?;
+
     let webauthn = state.webauthn.as_ref().ok_or_else(|| {
         ApiError(AuthError::Internal("webauthn not configured".into()))
     })?;

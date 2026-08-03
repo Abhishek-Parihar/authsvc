@@ -1,4 +1,4 @@
-.PHONY: build run test fmt lint brew-up brew-down brew-status docker-up docker-down docker-build migrate perf security-audit helm-template
+.PHONY: build run test fmt lint brew-up brew-down brew-status docker-up docker-down docker-build migrate perf security-audit helm-template verify-production
 
 build:
 	cargo build -p authsvc-server
@@ -24,10 +24,20 @@ security-audit:
 
 helm-template:
 	helm template authsvc deploy/helm/authsvc \
+		-f deploy/helm/authsvc/values-prod.yaml \
 		--set secrets.jwtPublicKeyPem="dummy" \
+		--set secrets.jwtPrivateKeyPem="dummy" \
+		--set secrets.databaseUrl="postgres://authsvc_app@postgres:5432/authsvc" \
+		--set secrets.redisUrl="redis://redis:6379" \
 		--set secrets.dataEncryptionKey="01234567890123456789012345678901" \
 		--set secrets.bootstrapSecret="bootstrap" \
+		--set secrets.metricsBearerToken="metrics-token" \
 		--set env.ALLOWED_ORIGINS="https://app.example.com"
+
+verify-production:
+	@test -n "$$AUTHSVC_URL" || (echo "Set AUTHSVC_URL (e.g. https://auth.example.com)" && exit 1)
+	@chmod +x scripts/verify_production.sh
+	@./scripts/verify_production.sh
 
 # Default local deps: Homebrew Postgres + Redis (no Docker)
 brew-up:

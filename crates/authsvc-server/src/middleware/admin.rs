@@ -1,123 +1,90 @@
 use axum::{
-    extract::{Request, State},
-    http::{header::AUTHORIZATION, StatusCode},
+    extract::State,
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::Response,
 };
-use serde_json::json;
-use uuid::Uuid;
 
 use crate::{
     handlers::{admin_session::admin_session_id_from_headers, SharedState},
-    middleware::{api_key_has_admin, authenticate, extract_api_key, AuthContext},
-    services::{
-        admin_session::resolve_admin_bearer_from_cookie,
-        api_keys::validate_api_key,
-        auth::is_bootstrap_open,
-        authz::user_has_admin_permission,
-    },
+    services::admin_session::validate_admin_session,
 };
 
 pub async fn require_admin(
     State(state): State<SharedState>,
-    mut request: Request,
+    request: axum::http::Request<axum::body::Body>,
     next: Next,
 ) -> Response {
     if let Some(session_id) = admin_session_id_from_headers(request.headers()) {
-        if let Ok(Some(token)) = resolve_admin_bearer_from_cookie(&state, &session_id).await {
-            if request.headers().get(AUTHORIZATION).is_none() {
-                request.headers_mut().insert(
-                    AUTHORIZATION,
-                    format!("Bearer {token}")
-                        .parse()
-                        .expect("valid bearer header"),
-                );
-            }
+        if validate_admin_session(&state, &session_id).await.is_ok() {
+            return next.run(request).await;
         }
     }
 
-    let auth_header = request
-        .headers()
-        .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok());
+    if crate::middleware::bootstrap_authorized(&state, request.headers()) {
+        return next.run(request).await;
+    }
 
-    if let Some(secret) = &state.config.bootstrap_secret {
-        if let Some(hdr) = auth_header {
-            if hdr == format!("Bearer {secret}") {
+    if let Some(key) = crate::middleware::extract_api_key(request.headers()) {
+        if let Ok((_, _, scopes)) =
+            crate::services::api_keys::validate_api_key(state.as_ref(), &key).await
+        {
+            if crate::middleware::api_key_has_admin(&scopes) {
                 return next.run(request).await;
             }
         }
     }
 
-    if let Some(key) = extract_api_key(request.headers()) {
-        if let Ok((_, _, scopes)) = validate_api_key(state.as_ref(), &key).await {
-            if api_key_has_admin(&scopes) {
-                return next.run(request).await;
-            }
-        }
-    }
-
-    match authenticate(&state, request.headers()).await {
-        Ok(AuthContext::UserJwt(claims)) => {
-            let user_id = match Uuid::parse_str(&claims.sub) {
+    match crate::middleware::authenticate(&state, request.headers()).await {
+        Ok(crate::middleware::AuthContext::UserJwt(claims)) => {
+            let user_id = match uuid::Uuid::parse_str(&claims.sub) {
                 Ok(id) => id,
                 Err(_) => return forbidden(),
             };
-            let account_id = match Uuid::parse_str(&claims.account_id) {
-                Ok(id) if id != Uuid::nil() => id,
+            let account_id = match uuid::Uuid::parse_str(&claims.account_id) {
+                Ok(id) if id != uuid::Uuid::nil() => id,
                 _ => return forbidden(),
             };
-            match user_has_admin_permission(state.as_ref(), user_id, account_id).await {
+            match crate::services::authz::user_has_admin_permission(
+                state.as_ref(),
+                user_id,
+                account_id,
+            )
+            .await
+            {
                 Ok(true) => next.run(request).await,
                 Ok(false) => forbidden(),
                 Err(_) => unauthorized(),
             }
         }
-        Ok(AuthContext::ApiKey { .. }) => forbidden(),
+        Ok(crate::middleware::AuthContext::ApiKey { .. }) => forbidden(),
         Err(_) => unauthorized(),
     }
 }
 
 pub async fn require_authenticated(
     State(state): State<SharedState>,
-    request: Request,
+    request: axum::http::Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    if let Some(secret) = &state.config.bootstrap_secret {
-        if let Some(hdr) = request
-            .headers()
-            .get(AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-        {
-            if hdr == format!("Bearer {secret}") {
-                return next.run(request).await;
-            }
-        }
-    }
-
-    if extract_api_key(request.headers()).is_some() {
-        return next.run(request).await;
-    }
-
-    match authenticate(&state, request.headers()).await {
-        Ok(AuthContext::UserJwt(_)) => next.run(request).await,
-        Ok(AuthContext::ApiKey { .. }) => next.run(request).await,
+    match crate::middleware::authenticate(&state, request.headers()).await {
+        Ok(crate::middleware::AuthContext::UserJwt(_)) => next.run(request).await,
+        Ok(crate::middleware::AuthContext::ApiKey { .. }) => forbidden(),
         Err(_) => unauthorized(),
     }
 }
 
 pub async fn require_bootstrap_or_open(
     State(state): State<SharedState>,
-    request: Request,
+    request: axum::http::Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    let user_count = match is_bootstrap_open(state.as_ref()).await {
+    let user_count = match crate::services::auth::is_bootstrap_open(state.as_ref()).await {
         Ok(true) => 0,
         Ok(false) => 1,
         Err(_) => {
             return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(json!({"error": "server_error"})),
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({"error": "server_error"})),
             )
                 .into_response()
         }
@@ -132,8 +99,8 @@ pub async fn require_bootstrap_or_open(
 
 fn unauthorized() -> Response {
     (
-        StatusCode::UNAUTHORIZED,
-        axum::Json(json!({
+        axum::http::StatusCode::UNAUTHORIZED,
+        axum::Json(serde_json::json!({
             "error": "unauthorized",
             "error_description": "admin token, bootstrap secret, or API key with admin scope required"
         })),
@@ -143,11 +110,13 @@ fn unauthorized() -> Response {
 
 fn forbidden() -> Response {
     (
-        StatusCode::FORBIDDEN,
-        axum::Json(json!({
+        axum::http::StatusCode::FORBIDDEN,
+        axum::Json(serde_json::json!({
             "error": "forbidden",
             "error_description": "account admin permission required"
         })),
     )
         .into_response()
 }
+
+use axum::response::IntoResponse;

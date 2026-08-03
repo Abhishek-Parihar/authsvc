@@ -22,6 +22,8 @@ pub enum AuthError {
     AccountLocked(String),
     #[error("forbidden")]
     Forbidden,
+    #[error("rate limit exceeded, retry after {0} seconds")]
+    RateLimited(u64),
     #[error("validation error: {0}")]
     Validation(String),
     #[error("authorization pending")]

@@ -1,5 +1,5 @@
 use axum::{
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -42,6 +42,19 @@ impl IntoResponse for ApiError {
                 (StatusCode::UNAUTHORIZED, "invalid_token")
             }
             AuthError::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
+            AuthError::RateLimited(secs) => {
+                let retry_after = header::HeaderValue::from_str(&secs.to_string())
+                    .unwrap_or_else(|_| header::HeaderValue::from_static("60"));
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    [(header::RETRY_AFTER, retry_after)],
+                    Json(json!({
+                        "error": "rate_limited",
+                        "error_description": format!("retry after {secs} seconds")
+                    })),
+                )
+                    .into_response();
+            }
             AuthError::UserAlreadyExists => (StatusCode::CONFLICT, "user_exists"),
             AuthError::UserNotFound | AuthError::ClientNotFound | AuthError::NotFound(_) => {
                 (StatusCode::NOT_FOUND, "not_found")
@@ -71,6 +84,7 @@ fn error_description(err: &AuthError) -> String {
         AuthError::Internal(_) => "internal server error".into(),
         AuthError::AuthorizationPending => "authorization pending".into(),
         AuthError::SlowDown => "slow down".into(),
+        AuthError::RateLimited(secs) => format!("retry after {secs} seconds"),
         other => other.to_string(),
     }
 }

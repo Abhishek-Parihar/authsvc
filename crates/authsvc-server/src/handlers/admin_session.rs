@@ -57,9 +57,7 @@ pub async fn session_status(
     headers: HeaderMap,
 ) -> AppResult<impl IntoResponse> {
     let connected = if let Some(id) = admin_session_id_from_headers(&headers) {
-        admin_session::resolve_admin_bearer_from_cookie(&state, &id)
-            .await?
-            .is_some()
+        admin_session::is_admin_session_valid(&state, &id).await?
     } else {
         false
     };

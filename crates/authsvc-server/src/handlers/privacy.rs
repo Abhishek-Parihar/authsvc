@@ -46,12 +46,7 @@ async fn resolve_privacy_caller(
 ) -> Result<(Uuid, Uuid), ApiError> {
     if let Some(hdr) = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()) {
         if let Some(token) = hdr.strip_prefix("Bearer ") {
-            let is_bootstrap = state
-                .config
-                .bootstrap_secret
-                .as_deref()
-                .is_some_and(|secret| token == secret);
-            if is_bootstrap {
+            if crate::middleware::bootstrap_token_matches(&state.config, token) {
                 return Err(ApiError(authsvc_core::AuthError::Validation(
                     "user JWT required for privacy operations".into(),
                 )));

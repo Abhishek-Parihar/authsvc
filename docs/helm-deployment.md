@@ -12,13 +12,25 @@ Deploy authsvc to Kubernetes with the chart in `deploy/helm/authsvc`.
 ## Quick start
 
 ```bash
-# Render manifests locally (no cluster required)
+# Render production manifests locally (no cluster required)
 make helm-template
 
-# Install with default values
+# Install with production values (see values-prod.yaml header for --set secrets)
 helm upgrade --install authsvc deploy/helm/authsvc \
+  -f deploy/helm/authsvc/values-prod.yaml \
   --namespace authsvc --create-namespace
 
+# Post-deploy verification
+export AUTHSVC_URL=https://auth.example.com
+export EXPECTED_ISSUER=https://auth.example.com
+export METRICS_BEARER_TOKEN=...
+export ADMIN_ACCESS_TOKEN=...   # optional admin JWT
+make verify-production
+```
+
+See `deploy/helm/authsvc/values-prod.yaml` for the full production values template.
+
+```bash
 # Install with overrides
 helm upgrade --install authsvc deploy/helm/authsvc \
   -f deploy/helm/authsvc/values.yaml \
@@ -40,7 +52,8 @@ Set these via `--set`, a values file, or an external secret manager:
 | `secrets.dataEncryptionKey` | `DATA_ENCRYPTION_KEY` | Min 32 chars; also accepts `mfaEncryptionKey` |
 | `secrets.jwtPublicKeyPem` | `JWT_PUBLIC_KEY_PEM` | Required in production |
 | `secrets.jwtPrivateKeyPem` | `JWT_PRIVATE_KEY_PEM` | Or use `env.JWT_KMS_HTTP_URL` |
-| `secrets.bootstrapSecret` | `BOOTSTRAP_SECRET` | First-admin bootstrap |
+| `secrets.metricsBearerToken` | `METRICS_BEARER_TOKEN` | Required in production |
+| `secrets.databaseMigratorUrl` | `DATABASE_MIGRATOR_URL` | Audit retention / migrations |
 
 ## Optional configuration
 

@@ -231,6 +231,7 @@ async fn register_login_refresh_authz_revoke_flow() {
     // Authz check
     let authz = client
         .post(format!("{base}/v1/authz/check"))
+        .header("Authorization", format!("Bearer {access_token}"))
         .json(&json!({
             "subject_id": user_id,
             "account_id": reg["account_id"].as_str().unwrap(),
@@ -1423,6 +1424,13 @@ async fn session_revoke_removes_redis_session() {
     )
     .await
     .expect("seed session");
+    deadpool_redis::redis::AsyncCommands::sadd::<_, _, ()>(
+        &mut redis_conn,
+        format!("user_sessions:{user_id}"),
+        session_id.to_string(),
+    )
+    .await
+    .expect("seed session index");
 
     let listed = client
         .get(format!("{base}/v1/users/{user_id}/sessions"))
